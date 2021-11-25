@@ -1,29 +1,63 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"log"
+	"net/http"
 
 	"example.com/wrapper"
+	"github.com/gorilla/websocket"
 )
 
-// func test(func(*websocket.Conn) (int, []byte, error)) {
+func makeWSConnector(dialer *websocket.Dialer, client *http.Client, ctx context.Context) func(http.ResponseWriter, *http.Request) {
 
-// }
+	return func(rw http.ResponseWriter, r *http.Request) {
+		conn := wrapper.TickerConnect("btcbusd", dialer, client)
+
+		// go func() {
+
+		// 	for {
+		// 		select {
+		// 		case <-ctx.Done():
+		// 			conn.Close()
+		// 			return
+		// 		default:
+		// 		}
+		// 	}
+
+		// }()
+
+		for {
+			ticker := &wrapper.Ticker{}
+			err := conn.ReadJSON(ticker)
+			// _, p, err := conn.ReadMessage()
+			if err != nil {
+				conn.Close()
+				return
+			}
+			// fmt.Println(len(p))
+			fmt.Println(ticker.Data["c"])
+		}
+	}
+}
+
+func makeWSDisconnector(cancel context.CancelFunc) func(http.ResponseWriter, *http.Request) {
+
+	return func(rw http.ResponseWriter, r *http.Request) {
+		cancel()
+	}
+}
 
 func main() {
+	dialer := &websocket.Dialer{ReadBufferSize: 256}
+	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
 
-	conn := wrapper.TickerConnect("btcbusd")
+	ctx, cancel := context.WithCancel(context.Background())
+	mux := http.NewServeMux()
+	mux.HandleFunc("/connect", makeWSConnector(dialer, client, ctx))
+	mux.HandleFunc("/disconnect", makeWSDisconnector(cancel))
+	server := &http.Server{Addr: ":8080", Handler: mux}
 
-	for {
-		// ticker := &wrapper.Ticker{}
-		// err := conn.ReadJSON(ticker)
-		_, p, err := conn.ReadMessage()
-
-		if err != nil {
-			conn.Close()
-			conn = wrapper.TickerConnect("btcbusd")
-		}
-		fmt.Println(len(p))
-		// fmt.Println(ticker.Data["c"])
-	}
+	log.Fatal(server.ListenAndServe())
 }
