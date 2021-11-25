@@ -27,9 +27,8 @@ func makeWSConnector(dialer *websocket.Dialer, client *http.Client, ctx context.
 		// 	}
 
 		// }()
-
+		ticker := &wrapper.Ticker{}
 		for {
-			ticker := &wrapper.Ticker{}
 			err := conn.ReadJSON(ticker)
 			// _, p, err := conn.ReadMessage()
 			if err != nil {
