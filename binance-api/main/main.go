@@ -10,29 +10,30 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-func makeWSConnector(dialer *websocket.Dialer, client *http.Client, ctx context.Context) func(http.ResponseWriter, *http.Request) {
+var (
+	ctx    context.Context
+	cancel context.CancelFunc
+)
+
+func makeWSConnector(dialer *websocket.Dialer, client *http.Client) func(http.ResponseWriter, *http.Request) {
 
 	return func(rw http.ResponseWriter, r *http.Request) {
+		ctx, cancel = context.WithCancel(context.Background())
 		conn := wrapper.TickerConnect("btcbusd", dialer, client)
 
-		// go func() {
+		go func() {
+			<-ctx.Done()
+			fmt.Println("Done")
+			conn.Close()
+		}()
 
-		// 	for {
-		// 		select {
-		// 		case <-ctx.Done():
-		// 			conn.Close()
-		// 			return
-		// 		default:
-		// 		}
-		// 	}
-
-		// }()
 		ticker := &wrapper.Ticker{}
 		for {
 			err := conn.ReadJSON(ticker)
 			// _, p, err := conn.ReadMessage()
 			if err != nil {
-				conn.Close()
+				fmt.Println("ReadJson: ", err)
+				// conn.Close()
 				return
 			}
 			// fmt.Println(len(p))
@@ -41,7 +42,7 @@ func makeWSConnector(dialer *websocket.Dialer, client *http.Client, ctx context.
 	}
 }
 
-func makeWSDisconnector(cancel context.CancelFunc) func(http.ResponseWriter, *http.Request) {
+func makeWSDisconnector() func(http.ResponseWriter, *http.Request) {
 
 	return func(rw http.ResponseWriter, r *http.Request) {
 		cancel()
@@ -52,11 +53,12 @@ func main() {
 	dialer := &websocket.Dialer{ReadBufferSize: 256}
 	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
 
-	ctx, cancel := context.WithCancel(context.Background())
 	mux := http.NewServeMux()
-	mux.HandleFunc("/connect", makeWSConnector(dialer, client, ctx))
-	mux.HandleFunc("/disconnect", makeWSDisconnector(cancel))
+	mux.HandleFunc("/connect", makeWSConnector(dialer, client))
+	mux.HandleFunc("/disconnect", makeWSDisconnector())
 	server := &http.Server{Addr: ":8080", Handler: mux}
+
+	fmt.Println("Connected")
 
 	log.Fatal(server.ListenAndServe())
 }
