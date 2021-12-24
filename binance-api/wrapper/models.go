@@ -1,5 +1,9 @@
 package wrapper
 
+import (
+	"context"
+)
+
 type Ticker struct {
 	Stream string                 `json:"-"`
 	Data   map[string]interface{} `json:"data"`
@@ -14,6 +18,11 @@ type AvgPrice struct {
 	Price string `json:"price"`
 	Code  int    `json:"code"`
 	Msg   string `json:"msg"`
+}
+
+type TGUpdate struct {
+	IsOK   bool     `json:"ok"`
+	Result []Update `json:"result"`
 }
 
 type Update struct {
@@ -84,4 +93,22 @@ type CallbackQuery struct {
 	InlineMsgId  string  `json:"inline_message_id"`
 	ChatInstance string  `json:"chat_instance"`
 	Data         string  `json:"data"`
+}
+
+type WSQuery struct {
+	UserId int64   `json:"user_id"`
+	ChatId int64   `json:"chat_id"`
+	Pair   string  `json:"pair"`
+	Price  float64 `json:"price"`
+}
+
+type UserStreams struct {
+	ChatId int64
+	Pairs  []string
+	Ctx    context.Context
+	Cancel context.CancelFunc
+	// ShutdownCh is giving a signal to close current websocket connection completely
+	ShutdownCh chan int
+	// ReconnectCh is giving a signal to close current connection and reconnect with new values
+	ReconnectCh chan int
 }
