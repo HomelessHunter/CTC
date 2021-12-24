@@ -17,12 +17,12 @@ import (
 )
 
 var (
-	userSteams map[int64]wrapper.UserStreams
-	regexps    map[string]*regexp.Regexp
+	userStreams map[int64]wrapper.UserStreams
+	regexps     map[string]*regexp.Regexp
 )
 
 func makeWSConnector(dialer *websocket.Dialer, client *http.Client) func(http.ResponseWriter, *http.Request) {
-	userSteams = make(map[int64]wrapper.UserStreams)
+	userStreams = make(map[int64]wrapper.UserStreams)
 
 	return func(rw http.ResponseWriter, r *http.Request) {
 
@@ -37,7 +37,7 @@ func makeWSConnector(dialer *websocket.Dialer, client *http.Client) func(http.Re
 			fmt.Fprintln(os.Stderr, err)
 		}
 		// Check if data.Pair already exists
-		if pairExist(data.Pair, userSteams[data.UserId].Pairs) {
+		if pairExist(data.Pair, userStreams[data.UserId].Pairs) {
 			// Send user response
 			fmt.Println("Pair already exists")
 			return
@@ -45,8 +45,8 @@ func makeWSConnector(dialer *websocket.Dialer, client *http.Client) func(http.Re
 
 		// Check if user have connected previously
 		// If true cancel that connection and add a new token pair
-		fmt.Println("Before: ", userSteams[data.UserId])
-		elem, ok := userSteams[data.UserId]
+		fmt.Println("Before: ", userStreams[data.UserId])
+		elem, ok := userStreams[data.UserId]
 		if ok {
 			elem.Cancel()
 			elem.Pairs = append(elem.Pairs, strings.ToLower(data.Pair))
@@ -60,50 +60,59 @@ func makeWSConnector(dialer *websocket.Dialer, client *http.Client) func(http.Re
 		// Connect to Binance
 		conn, err := wrapper.TickerConnect(elem.Pairs, dialer, client)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
+			fmt.Fprintln(os.Stderr, "Cannot connect", err)
 			return
 		}
 		ctx, cancel := context.WithCancel(context.Background())
 
-		elem.Ctx = ctx
 		elem.Cancel = cancel
 
-		userSteams[data.UserId] = elem
-		fmt.Println("After: ", userSteams[data.UserId])
+		userStreams[data.UserId] = elem
+		fmt.Println("After: ", userStreams[data.UserId])
 
-		go func() {
+		// Close websocket connection
+		go func(ctx context.Context) {
 			<-ctx.Done()
 			fmt.Println("Done")
 			select {
 			case <-elem.ReconnectCh:
 				elem.ReconnectCh <- 1
 				conn.Close()
-			default:
+			case <-elem.ShutdownCh:
 				elem.ShutdownCh <- 1
 				conn.Close()
+			default:
+				err := conn.Close()
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Connection closed: %s", err)
+				}
 			}
-		}()
+		}(ctx)
 
-		go checkPrice(conn, rw, r, &elem, data.UserId)
+		go checkPrice(conn, rw, r, data.UserId)
 	}
 }
 
-func checkPrice(conn *websocket.Conn, rw http.ResponseWriter, r *http.Request, userStream *wrapper.UserStreams, userId int64) {
+func checkPrice(conn *websocket.Conn, rw http.ResponseWriter, r *http.Request, userId int64) {
 	ticker := &wrapper.Ticker{}
 	for {
 		err := conn.ReadJSON(ticker)
 
 		if err != nil {
 			fmt.Println("ReadJson: ", err)
+			userStream := userStreams[userId]
 			select {
 			case <-userStream.ShutdownCh:
-				delete(userSteams, userId)
+				delete(userStreams, userId)
 				// delete from future db as well
 			case <-userStream.ReconnectCh:
 				// reconnect
 				http.Redirect(rw, r, "/connect", http.StatusFound)
 			default:
-				// do nothing
+				// Close go-routine to prevent leakage
+				userStream.Cancel()
+				// reconnect in case of 24h limit or other error
+				http.Redirect(rw, r, "/connect", http.StatusFound)
 			}
 			return
 		}
@@ -123,7 +132,7 @@ func makeWSDisconnector(disconnectCh chan int) func(http.ResponseWriter, *http.R
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 		}
-		elem, ok := userSteams[update.Msg.From.Id]
+		elem, ok := userStreams[update.Msg.From.Id]
 		if !ok {
 			fmt.Fprintln(os.Stderr, fmt.Errorf("user with %d ID doesn't have any connections", update.Msg.From.Id))
 			return
@@ -136,10 +145,11 @@ func makeWSDisconnector(disconnectCh chan int) func(http.ResponseWriter, *http.R
 		// remove pair and reconnect or disconnect completely
 		if index := <-disconnectCh; index < len(elem.Pairs) && index >= 0 {
 			elem.Pairs = removePair(elem.Pairs, index)
-			userSteams[update.Msg.From.Id] = elem
-			userSteams[update.Msg.From.Id].ReconnectCh <- 1
+			userStreams[update.Msg.From.Id] = elem
+			userStreams[update.Msg.From.Id].ReconnectCh <- 1
 			elem.Cancel()
 		} else {
+			userStreams[update.Msg.From.Id].ShutdownCh <- 1
 			elem.Cancel()
 		}
 	}
