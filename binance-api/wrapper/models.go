@@ -105,7 +105,6 @@ type WSQuery struct {
 type UserStreams struct {
 	ChatId int64
 	Pairs  []string
-	Ctx    context.Context
 	Cancel context.CancelFunc
 	// ShutdownCh is giving a signal to close current websocket connection completely
 	ShutdownCh chan int
