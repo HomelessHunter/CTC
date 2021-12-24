@@ -4,6 +4,8 @@ import (
 	"context"
 )
 
+// Crypto
+
 type Ticker struct {
 	Stream string                 `json:"-"`
 	Data   map[string]interface{} `json:"data"`
@@ -19,6 +21,10 @@ type AvgPrice struct {
 	Code  int    `json:"code"`
 	Msg   string `json:"msg"`
 }
+
+//
+
+// Telegram
 
 type TGUpdate struct {
 	IsOK   bool     `json:"ok"`
@@ -60,13 +66,14 @@ type Chat struct {
 }
 
 type Message struct {
-	Id         int             `json:"message_id"`
-	From       User            `json:"from"`
-	SenderChat Chat            `json:"sender_chat"`
-	Date       int             `json:"date"`
-	Chat       Chat            `json:"chat"`
-	Text       string          `json:"text"`
-	Entities   []MessageEntity `json:"entities"`
+	Id          int                  `json:"message_id"`
+	From        User                 `json:"from"`
+	SenderChat  Chat                 `json:"sender_chat"`
+	Date        int                  `json:"date"`
+	Chat        Chat                 `json:"chat"`
+	Text        string               `json:"text"`
+	Entities    []MessageEntity      `json:"entities"`
+	ReplyMarkup InlineKeyboardMarkup `json:"reply_markup"`
 }
 
 type MessageEntity struct {
@@ -78,6 +85,19 @@ type MessageEntity struct {
 	Language string `json:"language"`
 }
 
+type SendMsgObj struct {
+	ChatId                int64                `json:"chat_id,omitempty"`
+	Text                  string               `json:"text,omitempty"`
+	ParseMode             string               `json:"parse_mode,omitempty"`
+	Entities              []MessageEntity      `json:"entities,omitempty"`
+	DisableWebPreview     bool                 `json:"disable_web_page_preview,omitempty"`
+	DisableNotification   bool                 `json:"disable_notification,omitempty"`
+	ReplyToMsgId          int                  `json:"reply_to_message_id,omitempty"`
+	AllowSendWithoutReply bool                 `json:"allow_sending_without_reply,omitempty"`
+	ReplyMarkup           InlineKeyboardMarkup `json:"reply_markup,omitempty"`
+}
+
+// Don't really need that right now
 type InlineQuery struct {
 	Id       string `json:"id"`
 	From     User   `json:"from"`
@@ -94,6 +114,20 @@ type CallbackQuery struct {
 	ChatInstance string  `json:"chat_instance"`
 	Data         string  `json:"data"`
 }
+
+type InlineKeyboardMarkup struct {
+	InlineKeyboard [][]InlineKeyboardButton `json:"inline_keyboard,omitempty"`
+}
+
+type InlineKeyboardButton struct {
+	Text              string `json:"text"`
+	Url               string `json:"url,omitempty"`
+	CallbackData      string `json:"callback_data,omitempty"`
+	SwitchInlineQuery string `json:"switch_inline_query,omitempty"`
+	SIQCurrentChat    string `json:"switch_inline_query_current_chat,omitempty"`
+}
+
+//
 
 type WSQuery struct {
 	UserId int64   `json:"user_id"`
