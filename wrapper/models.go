@@ -66,14 +66,14 @@ type Chat struct {
 }
 
 type Message struct {
-	Id          int                  `json:"message_id"`
-	From        User                 `json:"from"`
-	SenderChat  Chat                 `json:"sender_chat"`
-	Date        int                  `json:"date"`
-	Chat        Chat                 `json:"chat"`
-	Text        string               `json:"text"`
-	Entities    []MessageEntity      `json:"entities"`
-	ReplyMarkup InlineKeyboardMarkup `json:"reply_markup"`
+	Id          int                  `json:"message_id,omitempty"`
+	From        User                 `json:"from,omitempty"`
+	SenderChat  Chat                 `json:"sender_chat,omitempty"`
+	Date        int                  `json:"date,omitempty"`
+	Chat        Chat                 `json:"chat,omitempty"`
+	Text        string               `json:"text,omitempty"`
+	Entities    []MessageEntity      `json:"entities,omitempty"`
+	ReplyMarkup InlineKeyboardMarkup `json:"reply_markup,omitempty"`
 }
 
 type MessageEntity struct {
