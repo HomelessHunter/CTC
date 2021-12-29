@@ -18,7 +18,7 @@ func pairExist(pair string, pairs []string) bool {
 func compileRegexp() map[string]*regexp.Regexp {
 	return map[string]*regexp.Regexp{
 		"alert":      regexp.MustCompile(`^\/(a|A)(lert)\s[A-Za-z]+\s[0-9]+\.[0-9]+$`),
-		"disconnect": regexp.MustCompile(`^\/(disconnect)$`),
+		"disconnect": regexp.MustCompile(`^\/*(disconnect)\s*[A-Za-z]*$`),
 		"splitter":   regexp.MustCompile(`\s`),
 	}
 }

@@ -12,7 +12,7 @@ import (
 	"regexp"
 	"strings"
 
-	"example.com/wrapper"
+	"github.com/HomelessHunter/CTC/wrapper"
 	"github.com/gorilla/websocket"
 )
 
@@ -63,6 +63,7 @@ func makeWSConnector(dialer *websocket.Dialer, client *http.Client) func(http.Re
 			fmt.Fprintln(os.Stderr, "Cannot connect", err)
 			return
 		}
+
 		ctx, cancel := context.WithCancel(context.Background())
 
 		elem.Cancel = cancel
@@ -84,16 +85,16 @@ func makeWSConnector(dialer *websocket.Dialer, client *http.Client) func(http.Re
 			default:
 				err := conn.Close()
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "Connection closed: %s", err)
+					fmt.Fprintf(os.Stderr, "Connection closed: %s\n", err)
 				}
 			}
 		}(ctx)
 
-		go checkPrice(conn, rw, r, data.UserId)
+		go checkPrice(conn, dialer, client, data.UserId)
 	}
 }
 
-func checkPrice(conn *websocket.Conn, rw http.ResponseWriter, r *http.Request, userId int64) {
+func checkPrice(conn *websocket.Conn, dialer *websocket.Dialer, client *http.Client, userId int64) {
 	ticker := &wrapper.Ticker{}
 	for {
 		err := conn.ReadJSON(ticker)
@@ -101,21 +102,33 @@ func checkPrice(conn *websocket.Conn, rw http.ResponseWriter, r *http.Request, u
 		if err != nil {
 			fmt.Println("ReadJson: ", err)
 			userStream := userStreams[userId]
+
 			select {
 			case <-userStream.ShutdownCh:
 				delete(userStreams, userId)
 				// delete from future db as well
 			case <-userStream.ReconnectCh:
 				// reconnect
-				http.Redirect(rw, r, "/connect", http.StatusFound)
+				conn, err = wrapper.TickerConnect(userStream.Pairs, dialer, client)
+				if err != nil {
+					fmt.Fprintln(os.Stderr, "checkPrice: cannot reconnect ", err)
+				} else {
+					continue
+				}
 			default:
 				// Close go-routine to prevent leakage
 				userStream.Cancel()
 				// reconnect in case of 24h limit or other error
-				http.Redirect(rw, r, "/connect", http.StatusFound)
+				conn, err = wrapper.TickerConnect(userStream.Pairs, dialer, client)
+				if err != nil {
+					fmt.Fprintln(os.Stderr, "checkPrice: cannot reconnect ", err)
+				} else {
+					continue
+				}
 			}
 			return
 		}
+
 		fmt.Println(ticker.GetLastPrice())
 	}
 }
@@ -127,11 +140,13 @@ func makeWSDisconnector(disconnectCh chan int) func(http.ResponseWriter, *http.R
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 		}
+
 		update := &wrapper.Update{}
 		err = json.Unmarshal(body, update)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 		}
+
 		elem, ok := userStreams[update.Msg.From.Id]
 		if !ok {
 			fmt.Fprintln(os.Stderr, fmt.Errorf("user with %d ID doesn't have any connections", update.Msg.From.Id))
@@ -140,7 +155,7 @@ func makeWSDisconnector(disconnectCh chan int) func(http.ResponseWriter, *http.R
 
 		disconnectCh := disconnectCh
 		// using Callback from TG to get pair for deletion
-		go checkDisconnectMsg(update.CallbackQuery.Msg.Text, disconnectCh, elem.Pairs)
+		go checkDisconnectMsg(update.CallbackQuery.Data, disconnectCh, elem.Pairs)
 
 		// remove pair and reconnect or disconnect completely
 		if index := <-disconnectCh; index < len(elem.Pairs) && index >= 0 {
@@ -171,43 +186,55 @@ func updateFromTG(rw http.ResponseWriter, r *http.Request) {
 	http.Redirect(rw, r, "/disconnect", http.StatusFound)
 }
 
-func update(rw http.ResponseWriter, r *http.Request) {
-	offset := 0
-	id := -1
-	for {
-		postBody, err := json.Marshal(map[string]int{
-			"offset":  -offset,
-			"limit":   100,
-			"timeout": 0,
-		})
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-		}
-		bodyReq := bytes.NewBuffer(postBody)
-		resp, err := http.Post(fmt.Sprintf("https://api.telegram.org/bot%s/getUpdates", os.Getenv("TG")), "application/json", bodyReq)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-		}
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-		}
-		update := &wrapper.TGUpdate{}
-		err = json.Unmarshal(body, update)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-		}
+func createUpdate(client *http.Client) func(http.ResponseWriter, *http.Request) {
 
-		if update.Result[len(update.Result)-1].Id == id {
-			continue
-		}
+	return func(rw http.ResponseWriter, r *http.Request) {
+		offset := 0
+		id := -1
+		for {
+			postBody, err := json.Marshal(map[string]int{
+				"offset":  -offset,
+				"limit":   100,
+				"timeout": 0,
+			})
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+			}
 
-		id = update.Result[len(update.Result)-1].Id
+			bodyReq := bytes.NewBuffer(postBody)
+			resp, err := http.Post(fmt.Sprintf("https://api.telegram.org/bot%s/getUpdates", os.Getenv("TG")), "application/json", bodyReq)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+			}
 
-		if len(update.Result) > 0 {
-			msg := update.Result[len(update.Result)-1].Msg
-			if s := msg.Entities; len(s) > 0 {
-				wrapper.CommandRouter(msg.Text, regexps, update.Result[len(update.Result)-1], rw, r)
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+			}
+
+			update := &wrapper.TGUpdate{}
+			err = json.Unmarshal(body, update)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+			}
+
+			result := update.Result[len(update.Result)-1]
+
+			if result.Id == id {
+				continue
+			}
+
+			id = result.Id
+
+			if len(update.Result) > 0 {
+				msg := result.Msg
+
+				switch {
+				case len(msg.Entities) > 0:
+					wrapper.CommandRouter(msg.Text, regexps, result, rw, client, userStreams[msg.From.Id].Pairs)
+				case result.CallbackQuery.Data != "":
+					// handle callbacks
+				}
 			}
 		}
 	}
@@ -225,7 +252,7 @@ func main() {
 	mux.HandleFunc("/connect", makeWSConnector(dialer, client))
 	mux.HandleFunc("/disconnect", makeWSDisconnector(disconnectCh))
 	mux.HandleFunc(fmt.Sprintf("/%s", os.Getenv("TG")), updateFromTG)
-	mux.HandleFunc("/update", update)
+	mux.HandleFunc("/update", createUpdate(client))
 	server := &http.Server{Addr: ":8080", Handler: mux}
 
 	regexps = compileRegexp()
