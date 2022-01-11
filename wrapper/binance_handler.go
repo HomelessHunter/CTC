@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/HomelessHunter/CTC/wrapper/models"
 	"github.com/gorilla/websocket"
 )
 
@@ -31,10 +32,6 @@ func checkPairs(pairs []string) string {
 	if len(pairs) == 1 {
 		return pairs[0] + "@miniTicker"
 	} else {
-		// for i, v := range pairs {
-		// 	pairs[i] = strings.ToLower(v)
-		// }
-
 		return strings.Join(pairs, "@miniTicker/") + "@miniTicker"
 	}
 }
@@ -44,14 +41,14 @@ func symbolsExist(pair string, client *http.Client) bool {
 	return avgPrice.Msg == ""
 }
 
-func AveragePrice(pair string, client *http.Client) AvgPrice {
+func AveragePrice(pair string, client *http.Client) models.AvgPrice {
 	resp, _ := client.Get(fmt.Sprintf("https://api.binance.com/api/v3/avgPrice?symbol=%s", strings.ToUpper(pair)))
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "AvgPrice: %s", err)
 	}
 	defer resp.Body.Close()
-	avgPrice := &AvgPrice{}
+	avgPrice := &models.AvgPrice{}
 	err = json.Unmarshal(data, avgPrice)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "AvgPrice: %s", err)

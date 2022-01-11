@@ -3,32 +3,33 @@ package main
 import (
 	"regexp"
 	"sort"
-	"strings"
 )
 
 func pairExist(pair string, pairs []string) bool {
-	for _, v := range pairs {
-		if strings.Contains(v, pair) {
+	if i := pairSearch(pairs, pair); i < len(pairs) && i >= 0 {
+		if pairs[i] == pair {
 			return true
 		}
 	}
+
 	return false
 }
 
 func compileRegexp() map[string]*regexp.Regexp {
 	return map[string]*regexp.Regexp{
+		"start":      regexp.MustCompile(`^\/(start)`),
 		"alert":      regexp.MustCompile(`^\/(a|A)(lert)\s[A-Za-z]+\s[0-9]+\.[0-9]+$`),
 		"disconnect": regexp.MustCompile(`^\/*(disconnect)\s*[A-Za-z]*$`),
 		"splitter":   regexp.MustCompile(`\s`),
 	}
 }
 
-func checkDisconnectMsg(msg string, disconnectCh chan<- int, pairs []string) {
+func checkDisconnectMsg(msg string, pairs []string) int {
 	switch msg {
 	case "all":
-		disconnectCh <- -1
+		return -1
 	default:
-		disconnectCh <- pairSearch(pairs, msg)
+		return pairSearch(pairs, msg)
 	}
 }
 
