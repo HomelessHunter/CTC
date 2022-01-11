@@ -13,6 +13,15 @@ type Message struct {
 	ReplyMarkup InlineKeyboardMarkup `json:"reply_markup,omitempty"`
 }
 
+type ResponseMessage struct {
+	Ok     bool    `json:"ok"`
+	Result Message `json:"result"`
+}
+
+func NewResponseMessage() *ResponseMessage {
+	return &ResponseMessage{}
+}
+
 func NewMsg(opts ...MsgOptions) (*Message, error) {
 	msg := Message{}
 
@@ -101,7 +110,7 @@ func WithMsgText(text string) MsgOptions {
 func WithMsgEntities(entities []MessageEntity) MsgOptions {
 	return func(m *Message) error {
 		if len(entities) == 0 {
-			return errors.New("entities shoildn't be empty")
+			return errors.New("entities shouldn't be empty")
 		}
 
 		m.Entities = entities

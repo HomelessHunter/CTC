@@ -3,7 +3,7 @@ package models
 import "errors"
 
 type SendMsgObj struct {
-	ChatId                int64                `json:"chat_id,omitempty"`
+	ChatId                int64                `json:"chat_id"`
 	Text                  string               `json:"text,omitempty"`
 	ParseMode             string               `json:"parse_mode,omitempty"`
 	Entities              []MessageEntity      `json:"entities,omitempty"`
@@ -32,7 +32,7 @@ type SendMsgObjOpts func(*SendMsgObj) error
 func WithSendChatId(chatId int64) SendMsgObjOpts {
 	return func(smo *SendMsgObj) error {
 		if chatId < 0 {
-			return errors.New("id shoudl be positive")
+			return errors.New("id should be positive")
 		}
 
 		smo.ChatId = chatId
@@ -65,7 +65,7 @@ func WithSendParseMode(parseMode string) SendMsgObjOpts {
 func WithSendEntities(entities []MessageEntity) SendMsgObjOpts {
 	return func(smo *SendMsgObj) error {
 		if len(entities) == 0 {
-			return errors.New("entities shouldn't be empty")
+			return errors.New("sendObj entities shouldn't be empty")
 		}
 
 		smo.Entities = entities

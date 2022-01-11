@@ -13,16 +13,17 @@ type UserStreams struct {
 	shutdownCh chan int
 	// ReconnectCh is giving a signal to close current connection and reconnect with new values
 	reconnectCh chan int
+	// addPairCh is giving a signal about pair appending
+	addPairCh chan int
 }
 
 type userStreams struct {
-	ChatId int64
-	Pairs  []string
-	Cancel context.CancelFunc
-	// ShutdownCh is giving a signal to close current websocket connection completely
-	ShutdownCh chan int
-	// ReconnectCh is giving a signal to close current connection and reconnect with new values
+	ChatId      int64
+	Pairs       []string
+	Cancel      context.CancelFunc
+	ShutdownCh  chan int
 	ReconnectCh chan int
+	addPairCh   chan int
 }
 
 func NewUserStreams(opts ...UserStreamsOpts) (*UserStreams, error) {
@@ -98,6 +99,18 @@ func (userStreams *UserStreams) Reconnect() {
 	userStreams.reconnectCh <- 1
 }
 
+func (userStreams *UserStreams) AddPairCh() chan int {
+	return userStreams.addPairCh
+}
+
+func (userStreams *UserStreams) SetAddPairCh(addPairCh chan int) {
+	userStreams.addPairCh = addPairCh
+}
+
+func (userStreams *UserStreams) AddPairSignal() {
+	userStreams.addPairCh <- 1
+}
+
 type UserStreamsOpts func(*userStreams) error
 
 func WithUSChatId(chatId int64) UserStreamsOpts {
@@ -143,6 +156,13 @@ func WithUSShutdown(shutdownCh chan int) UserStreamsOpts {
 func WithUSReconnect(reconnectCh chan int) UserStreamsOpts {
 	return func(us *userStreams) error {
 		us.ReconnectCh = reconnectCh
+		return nil
+	}
+}
+
+func WithUSAddPairCh(addPairCh chan int) UserStreamsOpts {
+	return func(us *userStreams) error {
+		us.addPairCh = addPairCh
 		return nil
 	}
 }
