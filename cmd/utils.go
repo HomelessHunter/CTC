@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"regexp"
 	"sort"
 )
@@ -24,12 +25,15 @@ func compileRegexp() map[string]*regexp.Regexp {
 	}
 }
 
-func checkDisconnectMsg(msg string, pairs []string) int {
-	switch msg {
+func checkDisconnectMsg(pair string, pairs []string) (int, error) {
+	if len(pairs) == 0 {
+		return -1, errors.New("pairs shouldn't be empty")
+	}
+	switch pair {
 	case "all":
-		return -1
+		return -1, nil
 	default:
-		return pairSearch(pairs, msg)
+		return pairSearch(pairs, pair), nil
 	}
 }
 

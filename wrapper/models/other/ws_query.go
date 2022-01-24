@@ -5,8 +5,9 @@ import "errors"
 type WSQuery struct {
 	UserId int64   `json:"user_id"`
 	ChatId int64   `json:"chat_id"`
+	Market string  `json:"market"`
 	Pair   string  `json:"pair"`
-	Price  float64 `json:"price"`
+	Price  float32 `json:"price"`
 }
 
 func NewWsQuery(opts ...WSQueryOpts) (*WSQuery, error) {
@@ -50,6 +51,17 @@ func WithWSChatId(chatId int64) WSQueryOpts {
 	}
 }
 
+func WithWSMarket(market string) WSQueryOpts {
+	return func(w *WSQuery) error {
+		if market == "" {
+			return errors.New("market shouldn't be empty")
+		}
+
+		w.Market = market
+		return nil
+	}
+}
+
 func WithWSPair(pair string) WSQueryOpts {
 	return func(w *WSQuery) error {
 		if pair == "" {
@@ -61,7 +73,7 @@ func WithWSPair(pair string) WSQueryOpts {
 	}
 }
 
-func WithWSPrice(price float64) WSQueryOpts {
+func WithWSPrice(price float32) WSQueryOpts {
 	return func(w *WSQuery) error {
 		if price < 0 {
 			return errors.New("price should be positive")

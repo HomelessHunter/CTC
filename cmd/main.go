@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -16,67 +17,170 @@ import (
 	"strings"
 	"time"
 
+	"github.com/HomelessHunter/CTC/db"
+	dbModels "github.com/HomelessHunter/CTC/db/models"
 	"github.com/HomelessHunter/CTC/wrapper"
-	"github.com/HomelessHunter/CTC/wrapper/models"
+	cryptoMarkets "github.com/HomelessHunter/CTC/wrapper/models/cryptoMarkets"
+	other "github.com/HomelessHunter/CTC/wrapper/models/other"
+	models "github.com/HomelessHunter/CTC/wrapper/models/telegram"
 	"github.com/gorilla/websocket"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 var (
-	userStreams map[int64]models.UserStreams
-	regexps     map[string]*regexp.Regexp
+	userChannels map[int64]other.UserChannels
+	regexps      map[string]*regexp.Regexp
 )
 
-func makeWSConnector(dialer *websocket.Dialer, client *http.Client, shutdownSrv chan int) func(http.ResponseWriter, *http.Request) {
-
-	return func(rw http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-		}
-
-		wsQuery, err := models.NewWsQuery()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return
-		}
-
-		err = json.Unmarshal(body, wsQuery)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return
-		}
-		go alertHandler(dialer, client, wsQuery, shutdownSrv)
+func main() {
+	ctx, cancel := context.WithCancel(context.Background())
+	dialer := &websocket.Dialer{
+		NetDialContext:   (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
+		HandshakeTimeout: 10 * time.Second,
+		ReadBufferSize:   256,
+		WriteBufferSize:  256,
 	}
+	client := &http.Client{
+		Transport: &http.Transport{
+			DialContext:           (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
+			IdleConnTimeout:       30 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ResponseHeaderTimeout: 10 * time.Second,
+			ReadBufferSize:        256,
+			WriteBufferSize:       256,
+		},
+	}
+	mongoClient, err := mongo.Connect(ctx, options.Client().ApplyURI(os.Getenv("MONGODB_URI")))
+	if err != nil {
+		panic(err)
+	}
+
+	coll := db.GetUserCollection(mongoClient)
+
+	regexps = compileRegexp()
+	userChannels = make(map[int64]other.UserChannels)
+
+	mux := http.NewServeMux()
+	// mux.HandleFunc("/connect", makeWSConnector(dialer, client, ctx))
+	// mux.HandleFunc("/disconnect", makeWSDisconnector())
+	mux.HandleFunc(fmt.Sprintf("/%s", os.Getenv("TG")), updateFromTG)
+	mux.HandleFunc("/update", createUpdate(dialer, client, ctx, coll))
+
+	// port := os.Getenv("PORT")
+
+	// if port == "" {
+	// 	port = ":8080"
+	// }
+	server := &http.Server{
+		Addr:        os.Getenv("PORT"),
+		Handler:     mux,
+		ReadTimeout: 10 * time.Second,
+		// WriteTimeout: 10 * time.Second,
+		IdleTimeout: 30 * time.Second,
+	}
+
+	go func() {
+		sigint := make(chan os.Signal, 1)
+		signal.Notify(sigint, os.Interrupt)
+		<-sigint
+
+		if err := server.Shutdown(context.Background()); err != nil {
+			log.Printf("HTTP server Shutdown: %v", err)
+		}
+	}()
+
+	fmt.Println("Connected")
+
+	// TEST
+	user, err := dbModels.NewMongoUser(
+		dbModels.WithUserID(1),
+		dbModels.WithChatID(1))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "cannot create user")
+	}
+	db.InsertNewUser(coll, user, ctx)
+	defer db.DeleteUserByID(coll, 1, ctx)
+
+	if err := server.ListenAndServe(); err != nil {
+		mongoClient.Disconnect(ctx)
+		cancel()
+		client.CloseIdleConnections()
+		fmt.Println(err)
+	}
+
 }
 
-func alertHandler(dialer *websocket.Dialer, client *http.Client, wsQuery *models.WSQuery, shutdownSrv chan int) error {
+// func makeWSConnector(dialer *websocket.Dialer, client *http.Client, shutdownSrv context.Context) func(http.ResponseWriter, *http.Request) {
+//
+// 	return func(rw http.ResponseWriter, r *http.Request) {
+// 		body, err := io.ReadAll(r.Body)
+// 		if err != nil {
+// 			fmt.Fprintln(os.Stderr, err)
+// 		}
+//
+// 		wsQuery, err := other.NewWsQuery()
+// 		if err != nil {
+// 			fmt.Fprintln(os.Stderr, err)
+// 			return
+// 		}
+//
+// 		err = json.Unmarshal(body, wsQuery)
+// 		if err != nil {
+// 			fmt.Fprintln(os.Stderr, err)
+// 			return
+// 		}
+// 		go alertHandler(dialer, client, wsQuery, shutdownSrv)
+// 	}
+// }
 
-	curUserStreams, ok := userStreams[wsQuery.UserId]
+// WHAT IF USER WANT TO RECEIVE INFO FROM DIFF MARKETS
+// THAT WON'T WORK UNLESS YOU CHANGE IT
+func alertHandler(dialer *websocket.Dialer, client *http.Client, wsQuery *other.WSQuery, shutdownSrv context.Context, coll *mongo.Collection) error {
 
+	curUserChannel, ok := userChannels[wsQuery.UserId]
+	var alert *dbModels.Alert
+	var err error
 	// Check if user have connected previously
 	// If false cancel that connection and add a new token pair
-	fmt.Println("Before: ", userStreams[wsQuery.UserId])
+	fmt.Println("Before: ", userChannels[wsQuery.UserId])
 	if ok {
 		// Check if data.Pair already exists
-		if pairExist(wsQuery.Pair, curUserStreams.Pairs()) {
+		if pairExist(wsQuery.Pair, curUserChannel.Pairs()) {
 			// Send user response
 			return errors.New("pair already exists")
-		} else {
-			curUserStreams.AddPairSignal()
-			curUserStreams.Cancel()
-			curUserStreams.SetPairs(curUserStreams.AddPairs(strings.ToLower(wsQuery.Pair)))
 		}
+
+		// DO I NEED AN ARRAY OF CHANNELS OR MAP
+		// AT LEAST 2 FOR DIFF CONNECTIONS
+		// if MarketExist(wsQuery.Market) {
+		// 	curUserChannel.AddPairSignal(wsQuery.Market)
+		// 	curUserChannel.Cancel(wsQuery.Market)
+		// }
+
+		alert, err = dbModels.NewAlert(dbModels.WithPair(wsQuery.Pair), dbModels.WithTargetPrice(wsQuery.Price))
+		if err != nil {
+			return fmt.Errorf("cannot create new alert: %s", err)
+		}
+		db.AddAlert(coll, wsQuery.UserId, alert, shutdownSrv)
+		curUserChannel.SetPairs(curUserChannel.AddPairs(strings.ToLower(wsQuery.Pair)))
+
 	} else {
-		curUserStreams.SetChatID(wsQuery.ChatId)
-		curUserStreams.SetShutdownCh(make(chan int, 1))
-		curUserStreams.SetReconnectCh(make(chan int, 1))
-		curUserStreams.SetAddPairCh(make(chan int, 1))
-		curUserStreams.SetPairs(curUserStreams.AddPairs(strings.ToLower(wsQuery.Pair)))
+		alert, err = dbModels.NewAlert(dbModels.WithPair(wsQuery.Pair), dbModels.WithTargetPrice(float32(wsQuery.Price)))
+		if err != nil {
+			return fmt.Errorf("cannot create new alert: %s", err)
+		}
+		db.AddAlert(coll, wsQuery.UserId, alert, shutdownSrv)
+		curUserChannel.SetChatID(wsQuery.ChatId)
+		curUserChannel.SetShutdownCh(wsQuery.Market, make(chan int, 1))
+		curUserChannel.SetReconnectCh(wsQuery.Market, make(chan int, 1))
+		curUserChannel.SetAddPairCh(wsQuery.Market, make(chan int, 1))
+		curUserChannel.SetPairs(curUserChannel.AddPairs(strings.ToLower(wsQuery.Pair)))
 	}
 
-	fmt.Println("PAIRS: ", curUserStreams.Pairs())
+	fmt.Println("PAIRS: ", curUserChannel.Pairs())
 
-	err := connectToWS(&curUserStreams, dialer, client, wsQuery, shutdownSrv)
+	err = connectToWS(&curUserChannel, dialer, client, wsQuery, shutdownSrv)
 	if err != nil {
 		return err
 	}
@@ -84,43 +188,39 @@ func alertHandler(dialer *websocket.Dialer, client *http.Client, wsQuery *models
 	return nil
 }
 
-func connectToWS(curUserStreams *models.UserStreams, dialer *websocket.Dialer, client *http.Client, wsQuery *models.WSQuery, shutdownSrv chan int) error {
+func connectToWS(curUserStreams *other.UserChannels, dialer *websocket.Dialer, client *http.Client, wsQuery *other.WSQuery, shutdownSrv context.Context) error {
 
-	if len(curUserStreams.Pairs()) == 0 {
-		return wrapper.ErrEmptyPairs
-	}
-
-	// Connect to Binance
-	conn, err := wrapper.TickerConnect(curUserStreams.Pairs(), dialer, client)
+	// Connect to Market
+	conn, err := wrapper.TickerConnect(wsQuery.Market, curUserStreams.Pairs(), dialer, client)
 	if err != nil {
 		// delete added pair if that's the reason of error
 		return err
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	curUserStreams.SetCancel(cancel)
+	curUserStreams.SetCancel(wsQuery.Market, cancel)
 
-	userStreams[wsQuery.UserId] = *curUserStreams
-	fmt.Println("After: ", userStreams[wsQuery.UserId])
+	userChannels[wsQuery.UserId] = *curUserStreams
+	fmt.Println("After: ", userChannels[wsQuery.UserId])
 
 	// Close websocket connection
-	go func(ctx context.Context, shutdownSrv chan int, curUserStreams *models.UserStreams) {
+	go func(ctx context.Context, shutdownSrv context.Context, curUserStreams *other.UserChannels) {
 		defer fmt.Println("Websocket CLOSED")
 		select {
-		case <-shutdownSrv:
-			curUserStreams.Shutdown()
+		case <-shutdownSrv.Done():
+			curUserStreams.Shutdown(wsQuery.Market)
 			conn.Close()
 		case <-ctx.Done():
 			fmt.Println("Done")
 			select {
-			case <-curUserStreams.ReconnectCh():
-				curUserStreams.Reconnect()
+			case <-curUserStreams.ReconnectCh(wsQuery.Market):
+				curUserStreams.Reconnect(wsQuery.Market)
 				conn.Close()
-			case <-curUserStreams.ShutdownCh():
-				curUserStreams.Shutdown()
+			case <-curUserStreams.ShutdownCh(wsQuery.Market):
+				curUserStreams.Shutdown(wsQuery.Market)
 				conn.Close()
-			case <-curUserStreams.AddPairCh():
-				curUserStreams.AddPairSignal()
+			case <-curUserStreams.AddPairCh(wsQuery.Market):
+				curUserStreams.AddPairSignal(wsQuery.Market)
 				conn.Close()
 			default:
 				err := conn.Close()
@@ -137,85 +237,156 @@ func connectToWS(curUserStreams *models.UserStreams, dialer *websocket.Dialer, c
 	return nil
 }
 
-func checkPrice(conn *websocket.Conn, dialer *websocket.Dialer, client *http.Client, wsQuery *models.WSQuery, shutdownSrv chan int) {
-	ticker := models.NewTicker()
-	defer fmt.Println("checkPrice CLOSED")
+func checkPrice(conn *websocket.Conn, dialer *websocket.Dialer, client *http.Client, wsQuery *other.WSQuery, shutdownSrv context.Context) {
+	defer fmt.Println("CheckPrice is DONE")
+	switch wsQuery.Market {
+	case wrapper.Huobi:
+		checkPriceHu(conn, dialer, client, wsQuery, shutdownSrv)
+	case wrapper.Binance:
+		checkPriceBi(conn, dialer, client, wsQuery, shutdownSrv)
+	}
+}
+
+func checkPriceBi(conn *websocket.Conn, dialer *websocket.Dialer, client *http.Client, wsQuery *other.WSQuery, shutdownSrv context.Context) {
+	ticker := cryptoMarkets.NewTickerBi()
+	defer fmt.Println("checkPriceBi is DONE")
 	for {
 		err := conn.ReadJSON(ticker)
 
 		if err != nil {
 			fmt.Println("ReadJson: ", err)
-			userStream := userStreams[wsQuery.UserId]
-
-			select {
-			case <-userStream.ShutdownCh():
-				delete(userStreams, wsQuery.UserId)
-				// delete from future db as well
-			case <-userStream.ReconnectCh():
-				// reconnect
-				err := connectToWS(&userStream, dialer, client, wsQuery, shutdownSrv)
-				if err != nil {
-					fmt.Fprintln(os.Stderr, err)
-				}
-			case <-userStream.AddPairCh():
-				fmt.Println("Adding new pair so do nothing")
-			default:
-				// Close go-routine to prevent leakage
-				userStream.Cancel()
-				// reconnect in case of 24h limit or other error
-				err := connectToWS(&userStream, dialer, client, wsQuery, shutdownSrv)
-				if err != nil {
-					fmt.Fprintln(os.Stderr, err)
-				}
-			}
+			handleConnReadErr(dialer, client, wsQuery, shutdownSrv)
 			return
 		}
 
+		fmt.Println(ticker.GetClosePrice())
+	}
+}
+
+func checkPriceHu(conn *websocket.Conn, dialer *websocket.Dialer, client *http.Client, wsQuery *other.WSQuery, shutdownSrv context.Context) {
+	defer fmt.Println("CheckPriceHu is DONE")
+	var buf bytes.Buffer
+	_, data, err := conn.ReadMessage()
+	if err != nil {
+		handleConnReadErr(dialer, client, wsQuery, shutdownSrv)
+		return
+	}
+	buf.Write(data)
+	zr, err := gzip.NewReader(&buf)
+	if err != nil {
+		handleCheckPriceErr(wsQuery)
+		return
+	}
+	defer zr.Close()
+
+	ticker := &cryptoMarkets.TickerHuobi{}
+	for {
+		zr.Multistream(false)
+		_, data, err = conn.ReadMessage()
+		if err != nil {
+			handleConnReadErr(dialer, client, wsQuery, shutdownSrv)
+			return
+		}
+		buf.Write(data)
+		data, err = io.ReadAll(zr)
+		if err != nil {
+			handleCheckPriceErr(wsQuery)
+			return
+		}
+		err = json.Unmarshal(data, ticker)
+		if err != nil {
+			handleCheckPriceErr(wsQuery)
+			return
+		}
 		fmt.Println(ticker.GetLastPrice())
-	}
-}
-
-func makeWSDisconnector() func(http.ResponseWriter, *http.Request) {
-
-	return func(rw http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
+		err = zr.Reset(&buf)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-		}
-
-		update, err := models.NewCallbackQuery()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
+			handleCheckPriceErr(wsQuery)
 			return
 		}
-
-		err = json.Unmarshal(body, update)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-		}
-
-		disconnectAlert(update)
 	}
 }
 
-func disconnectAlert(callback *models.CallbackQuery) error {
+func handleCheckPriceErr(wsQuery *other.WSQuery) {
+	userChannel := userChannels[wsQuery.UserId]
+	userChannel.Cancel(wsQuery.Market)
+}
 
-	elem, ok := userStreams[callback.From.Id]
+func handleConnReadErr(dialer *websocket.Dialer, client *http.Client, wsQuery *other.WSQuery, shutdownSrv context.Context) {
+	userChannel := userChannels[wsQuery.UserId]
+	select {
+	case <-userChannel.ShutdownCh(wsQuery.Market):
+		delete(userChannels, wsQuery.UserId)
+
+	case <-userChannel.ReconnectCh(wsQuery.Market):
+		// reconnect
+		err := connectToWS(&userChannel, dialer, client, wsQuery, shutdownSrv)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+		}
+	case <-userChannel.AddPairCh(wsQuery.Market):
+		fmt.Println("Adding new pair so do nothing")
+	default:
+		// Close go-routine to prevent leakage
+		userChannel.Cancel(wsQuery.Market)
+		// reconnect in case of 24h limit or other error
+		err := connectToWS(&userChannel, dialer, client, wsQuery, shutdownSrv)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+		}
+	}
+}
+
+// func makeWSDisconnector() func(http.ResponseWriter, *http.Request) {
+//
+// 	return func(rw http.ResponseWriter, r *http.Request) {
+// 		body, err := io.ReadAll(r.Body)
+// 		if err != nil {
+// 			fmt.Fprintln(os.Stderr, err)
+// 		}
+//
+// 		update, err := models.NewCallbackQuery()
+// 		if err != nil {
+// 			fmt.Fprintln(os.Stderr, err)
+// 			return
+// 		}
+//
+// 		err = json.Unmarshal(body, update)
+// 		if err != nil {
+// 			fmt.Fprintln(os.Stderr, err)
+// 		}
+//
+// 		disconnectAlert(update)
+// 	}
+// }
+
+func disconnectAlert(coll *mongo.Collection, ctx context.Context, callback *models.CallbackQuery) error {
+
+	pairs, err := db.GetAlertsPairs(coll, callback.From.Id, ctx)
+	if err != nil || len(pairs) == 0 {
+		return fmt.Errorf("user with %d ID doesn't have any connections", callback.From.Id)
+	}
+	elem, ok := userChannels[callback.From.Id]
 	if !ok {
 		return fmt.Errorf("user with %d ID doesn't have any connections", callback.From.Id)
 	}
-
+	// split callback data to get pair and market
+	pair, market := wrapper.SplitCallbackData(callback.Data)
 	// using Callback from TG to get pair for deletion
 	// remove pair and reconnect or disconnect completely
-	if index := checkDisconnectMsg(callback.Data, elem.Pairs()); index < len(elem.Pairs()) && index >= 0 {
+	index, err := checkDisconnectMsg(pair, pairs)
+	if err != nil {
+		return errors.New("cannot check msg")
+	}
+	if index < len(pairs) && index >= 0 {
 		elem.SetPairs(removePair(elem.Pairs(), index))
-		userStreams[callback.From.Id] = elem
+		userChannels[callback.From.Id] = elem
 
-		elem.Reconnect()
-		elem.Cancel()
+		elem.Reconnect(market)
+		elem.Cancel(market)
 	} else {
-		elem.Shutdown()
-		elem.Cancel()
+		elem.Shutdown(market)
+		elem.Cancel(market)
 	}
 	return nil
 }
@@ -236,7 +407,7 @@ func updateFromTG(rw http.ResponseWriter, r *http.Request) {
 	http.Redirect(rw, r, "/disconnect", http.StatusFound)
 }
 
-func createUpdate(dialer *websocket.Dialer, client *http.Client, shutdownSrv chan int) func(http.ResponseWriter, *http.Request) {
+func createUpdate(dialer *websocket.Dialer, client *http.Client, shutdownSrv context.Context, coll *mongo.Collection) func(http.ResponseWriter, *http.Request) {
 
 	return func(rw http.ResponseWriter, r *http.Request) {
 		offset := 0
@@ -284,11 +455,19 @@ func createUpdate(dialer *websocket.Dialer, client *http.Client, shutdownSrv cha
 					case len(msg.Entities) > 0:
 						// handle commands
 						fmt.Println(msg.Text)
-						us := userStreams[msg.From.Id]
-						wsQuery, method := wrapper.CommandRouter(msg.Text, regexps, &result, client, us.Pairs())
+						pairs, err := db.GetAlertsPairs(coll, result.FromUser().Id, shutdownSrv)
+						if err != nil {
+							fmt.Fprintln(os.Stderr, err)
+						}
+						// us := userChannels[msg.From.Id]
+						wsQuery, method, err := wrapper.CommandRouter(msg.Text, regexps, &result, client, pairs)
+						if err != nil {
+							fmt.Fprintln(os.Stderr, fmt.Errorf("cannot parse command: %s", err))
+						}
+
 						switch method {
 						case "alert":
-							err := alertHandler(dialer, client, wsQuery, shutdownSrv)
+							err := alertHandler(dialer, client, wsQuery, shutdownSrv, coll)
 							if err != nil {
 								fmt.Fprintln(os.Stderr, err)
 								return
@@ -300,26 +479,38 @@ func createUpdate(dialer *websocket.Dialer, client *http.Client, shutdownSrv cha
 					case result.GetCallbackData() != "":
 
 						// handle callbacks
-						callback, method := wrapper.CallbackHandler(&result, regexps)
+						callback, method, err := wrapper.CallbackHandler(client, &result, regexps)
+						if err != nil {
+							fmt.Fprintln(os.Stderr, err)
+							return
+						}
 
 						switch method {
 						case "disconnect":
-							err := disconnectAlert(callback)
+							err := disconnectAlert(coll, shutdownSrv, callback)
 
-							fmt.Println(callback.Data)
+							// fmt.Println(callback.Data)
 							if err != nil {
 								fmt.Fprintln(os.Stderr, err)
 								return
 							}
 
-							answer, err := models.NewCallbackAnswer(models.WithAnswerID(callback.Id), models.WithAnswerText("Alert(s) disabled"), models.WithAnswerCacheTime(1))
+							answer, err := models.NewCallbackAnswer(
+								models.WithAnswerID(callback.Id),
+								models.WithAnswerText("Alert(s) disabled"),
+								models.WithAnswerCacheTime(1),
+							)
 							if err != nil {
 								fmt.Fprintln(os.Stderr, err)
 								return
 							}
 							wrapper.SendCallbackAnswer(client, answer)
-							us := userStreams[callback.From.Id]
-							err = wrapper.EditMarkup(client, callback, us.Pairs())
+							pairs, err := db.GetAlertsPairs(coll, result.FromUser().Id, shutdownSrv)
+							if err != nil {
+								fmt.Fprintln(os.Stderr, err)
+							}
+							// us := userChannels[callback.From.Id]
+							err = wrapper.EditMarkup(client, callback, pairs)
 							if err != nil {
 								fmt.Fprintln(os.Stderr, err)
 								return
@@ -332,59 +523,4 @@ func createUpdate(dialer *websocket.Dialer, client *http.Client, shutdownSrv cha
 			}(update)
 		}
 	}
-}
-
-func main() {
-	dialer := &websocket.Dialer{
-		NetDialContext:   (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
-		HandshakeTimeout: 10 * time.Second,
-		ReadBufferSize:   256,
-		WriteBufferSize:  256,
-	}
-	client := &http.Client{
-		Transport: &http.Transport{
-			DialContext:           (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
-			IdleConnTimeout:       30 * time.Second,
-			TLSHandshakeTimeout:   10 * time.Second,
-			ResponseHeaderTimeout: 10 * time.Second,
-			ReadBufferSize:        256,
-			WriteBufferSize:       256,
-		},
-	}
-	shutdownSrv := make(chan int, 1)
-	regexps = compileRegexp()
-	userStreams = make(map[int64]models.UserStreams)
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/connect", makeWSConnector(dialer, client, shutdownSrv))
-	mux.HandleFunc("/disconnect", makeWSDisconnector())
-	mux.HandleFunc(fmt.Sprintf("/%s", os.Getenv("TG")), updateFromTG)
-	mux.HandleFunc("/update", createUpdate(dialer, client, shutdownSrv))
-
-	server := &http.Server{
-		Addr:        ":8080",
-		Handler:     mux,
-		ReadTimeout: 10 * time.Second,
-		// WriteTimeout: 10 * time.Second,
-		IdleTimeout: 30 * time.Second,
-	}
-
-	go func() {
-		sigint := make(chan os.Signal, 1)
-		signal.Notify(sigint, os.Interrupt)
-		<-sigint
-
-		if err := server.Shutdown(context.Background()); err != nil {
-			log.Printf("HTTP server Shutdown: %v", err)
-		}
-	}()
-
-	fmt.Println("Connected")
-
-	if err := server.ListenAndServe(); err != nil {
-		shutdownSrv <- 1
-		fmt.Println(err)
-		client.CloseIdleConnections()
-	}
-
 }

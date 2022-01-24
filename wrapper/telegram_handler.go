@@ -10,9 +10,11 @@ import (
 	"os"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
-	"github.com/HomelessHunter/CTC/wrapper/models"
+	other "github.com/HomelessHunter/CTC/wrapper/models/other"
+	telegram "github.com/HomelessHunter/CTC/wrapper/models/telegram"
 )
 
 var ErrEmptyPairs = errors.New("pairs shouldn't be empty")
@@ -42,38 +44,43 @@ func SetWebhook(client *http.Client) {
 }
 
 func CommandRouter(command string, regs map[string]*regexp.Regexp,
-	update *models.Update, client *http.Client, pairs []string) (*models.WSQuery, string) {
+	update *telegram.Update, client *http.Client, pairs []string) (*other.WSQuery, string, error) {
 
 	switch {
 	case regs["start"].MatchString(command):
-		msg, err := models.NewMsg(models.WithMsgText("Hello"), models.WithMsgChat(update.FromChat()))
+		msg, err := telegram.NewMsg(telegram.WithMsgText("Hello"), telegram.WithMsgChat(update.FromChat()))
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
-			return nil, ""
+			return nil, "", err
 		}
 
 		sendMsg(client, msg, false)
 
 	case regs["alert"].MatchString(command):
 		c := regs["splitter"].Split(command, 3)
-		price, err := strconv.ParseFloat(c[2], 64)
+		price, err := strconv.ParseFloat(c[2], 32)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
-			return nil, ""
+			return nil, "", err
+		}
+		market, err := GetMarket(c[1], client)
+		if err != nil {
+			return nil, "", err
 		}
 
-		wsQuery, err := models.NewWsQuery(
-			models.WithWSUserId(update.FromUser().ID()),
-			models.WithWSChatId(update.FromChat().ID()),
-			models.WithWSPair(c[1]),
-			models.WithWSPrice(price),
+		wsQuery, err := other.NewWsQuery(
+			other.WithWSUserId(update.FromUser().ID()),
+			other.WithWSChatId(update.FromChat().ID()),
+			other.WithWSMarket(market),
+			other.WithWSPair(c[1]),
+			other.WithWSPrice(float32(price)),
 		)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
-			return nil, ""
+			return nil, "", err
 		}
 
-		return wsQuery, "alert"
+		return wsQuery, "alert", nil
 
 	case regs["disconnect"].MatchString(command):
 
@@ -81,44 +88,55 @@ func CommandRouter(command string, regs map[string]*regexp.Regexp,
 		if err != nil {
 
 			if err == ErrEmptyPairs {
-				msg, err := models.NewMsg(
-					models.WithMsgId(update.Id),
-					models.WithMsgChat(update.FromChat()),
-					models.WithMsgText("You have no alerts"),
+				msg, err := telegram.NewMsg(
+					telegram.WithMsgId(update.Id),
+					telegram.WithMsgChat(update.FromChat()),
+					telegram.WithMsgText("You have no alerts"),
 				)
 				if err != nil {
 					fmt.Fprintln(os.Stderr, err)
-					return nil, ""
+					return nil, "", err
 				}
 				sendNDiscardMsg(client, msg, false, 2)
-				return nil, "disconnect"
+				return nil, "", err
 			}
 
 			fmt.Fprintln(os.Stderr, err)
-			return nil, "disconnect"
+			return nil, "", err
 		}
 		sendDisconnectMsg(client, update.FromChat(), ik)
 
 	}
-	return nil, ""
+	return nil, "", fmt.Errorf("no such command %s", command)
 }
 
-func CallbackHandler(update *models.Update, regs map[string]*regexp.Regexp) (*models.CallbackQuery, string) {
+func CallbackHandler(client *http.Client, update *telegram.Update, regs map[string]*regexp.Regexp) (*telegram.CallbackQuery, string, error) {
 	switch {
 	case regs["disconnect"].MatchString(update.GetCallbackData()):
 		fmt.Println("CallbackHandler", update.CallbackQuery.From)
 		callbackData := regs["splitter"].Split(update.GetCallbackData(), 2)[1]
-		update.CallbackQuery.SetData(callbackData)
+		market, err := GetMarket(callbackData, client)
+		if err != nil {
+			return nil, "", err
+		}
+		update.CallbackQuery.SetData(fmt.Sprintf("%s %s", callbackData, market))
 
-		return &update.CallbackQuery, "disconnect"
+		return &update.CallbackQuery, "disconnect", nil
 
 	default:
 
 	}
-	return nil, ""
+	return nil, "", fmt.Errorf("no handler for such callback %s", update.GetCallbackData())
 }
 
-func SendCallbackAnswer(client *http.Client, callbackAnswer *models.CallbackAnswer) {
+func SplitCallbackData(data string) (pair string, market string) {
+	callback := strings.Split(data, " ")
+	pair = callback[0]
+	market = callback[1]
+	return
+}
+
+func SendCallbackAnswer(client *http.Client, callbackAnswer *telegram.CallbackAnswer) {
 	data, err := json.Marshal(callbackAnswer)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -133,14 +151,14 @@ func SendCallbackAnswer(client *http.Client, callbackAnswer *models.CallbackAnsw
 	}
 }
 
-func sendMsg(client *http.Client, msg *models.Message, notify bool) *models.Message {
-	sendObj, err := models.NewSendMsgObj(
-		models.WithSendChatId(msg.FromChatID()),
-		models.WithSendText(msg.Text),
-		models.WithSendParseMode("HTML"),
-		models.WithSendDisableNotification(notify),
-		models.WithSendAllowReply(true),
-		models.WithSendReplyMarkup(msg.ReplyMarkup),
+func sendMsg(client *http.Client, msg *telegram.Message, notify bool) *telegram.Message {
+	sendObj, err := telegram.NewSendMsgObj(
+		telegram.WithSendChatId(msg.FromChatID()),
+		telegram.WithSendText(msg.Text),
+		telegram.WithSendParseMode("HTML"),
+		telegram.WithSendDisableNotification(notify),
+		telegram.WithSendAllowReply(true),
+		telegram.WithSendReplyMarkup(msg.ReplyMarkup),
 	)
 
 	if err != nil {
@@ -170,7 +188,7 @@ func sendMsg(client *http.Client, msg *models.Message, notify bool) *models.Mess
 
 	fmt.Println(string(data))
 
-	responseMsg := models.NewResponseMessage()
+	responseMsg := telegram.NewResponseMessage()
 
 	err = json.Unmarshal(data, responseMsg)
 	if err != nil {
@@ -183,18 +201,18 @@ func sendMsg(client *http.Client, msg *models.Message, notify bool) *models.Mess
 	return &responseMsg.Result
 }
 
-func sendNDiscardMsg(client *http.Client, msg *models.Message, notify bool, cacheTimer int) {
+func sendNDiscardMsg(client *http.Client, msg *telegram.Message, notify bool, cacheTimer int) {
 	respMsg := sendMsg(client, msg, notify)
 	<-time.After(time.Duration(cacheTimer) * time.Second)
 	deleteMsg(client, respMsg.FromChatID(), respMsg.Id)
 }
 
-func sendDisconnectMsg(client *http.Client, chat *models.Chat, ik *models.InlineKeyboardMarkup) {
+func sendDisconnectMsg(client *http.Client, chat *telegram.Chat, ik *telegram.InlineKeyboardMarkup) {
 
-	msg, err := models.NewMsg(
-		models.WithMsgChat(chat),
-		models.WithMsgText("Choose alerts to disconnect"),
-		models.WithMsgReplyMarkup(ik),
+	msg, err := telegram.NewMsg(
+		telegram.WithMsgChat(chat),
+		telegram.WithMsgText("Choose alerts to disconnect"),
+		telegram.WithMsgReplyMarkup(ik),
 	)
 
 	if err != nil {
@@ -205,7 +223,7 @@ func sendDisconnectMsg(client *http.Client, chat *models.Chat, ik *models.Inline
 	sendMsg(client, msg, false)
 }
 
-func EditMarkup(client *http.Client, callback *models.CallbackQuery, pairs []string) error {
+func EditMarkup(client *http.Client, callback *telegram.CallbackQuery, pairs []string) error {
 	if len(pairs) == 0 {
 		// delete msg
 		if !deleteMsg(client, callback.Msg.FromChatID(), callback.Msg.Id) {
@@ -218,10 +236,10 @@ func EditMarkup(client *http.Client, callback *models.CallbackQuery, pairs []str
 		return err
 	}
 
-	editMarkup, err := models.NewEditMSGReplyMarkup(
-		models.WithEMOChatID(callback.Msg.FromChatID()),
-		models.WithEMOMsgID(callback.Msg.Id),
-		models.WithEMOReplyMarkup(ik),
+	editMarkup, err := telegram.NewEditMSGReplyMarkup(
+		telegram.WithEMOChatID(callback.Msg.FromChatID()),
+		telegram.WithEMOMsgID(callback.Msg.Id),
+		telegram.WithEMOReplyMarkup(ik),
 	)
 	if err != nil {
 		return err
@@ -231,7 +249,7 @@ func EditMarkup(client *http.Client, callback *models.CallbackQuery, pairs []str
 	return nil
 }
 
-func editMSGReplyMarkup(client *http.Client, editMarkup *models.EditMarkupObj) {
+func editMSGReplyMarkup(client *http.Client, editMarkup *telegram.EditMarkupObj) {
 	data, err := json.Marshal(editMarkup)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -245,13 +263,13 @@ func editMSGReplyMarkup(client *http.Client, editMarkup *models.EditMarkupObj) {
 	}
 }
 
-func composeKeyboardMarkup(pairs []string) (*models.InlineKeyboardMarkup, error) {
+func composeKeyboardMarkup(pairs []string) (*telegram.InlineKeyboardMarkup, error) {
 	if len(pairs) > 0 {
-		inlineButtons := make([]models.InlineKeyboardButton, len(pairs)+1)
+		inlineButtons := make([]telegram.InlineKeyboardButton, len(pairs)+1)
 
-		disconnectAllBut, err := models.NewInlineKeyboardButton(
-			models.WithIKBText("All"),
-			models.WithIKBCallbackData("disconnect all"),
+		disconnectAllBut, err := telegram.NewInlineKeyboardButton(
+			telegram.WithIKBText("All"),
+			telegram.WithIKBCallbackData("disconnect all"),
 		)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -261,9 +279,9 @@ func composeKeyboardMarkup(pairs []string) (*models.InlineKeyboardMarkup, error)
 		inlineButtons[len(inlineButtons)-1] = *disconnectAllBut
 
 		for i, v := range pairs {
-			ikb, err := models.NewInlineKeyboardButton(
-				models.WithIKBText(v),
-				models.WithIKBCallbackData(fmt.Sprintf("disconnect %s", v)),
+			ikb, err := telegram.NewInlineKeyboardButton(
+				telegram.WithIKBText(v),
+				telegram.WithIKBCallbackData(fmt.Sprintf("disconnect %s", v)),
 			)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, err)
@@ -282,7 +300,7 @@ func composeKeyboardMarkup(pairs []string) (*models.InlineKeyboardMarkup, error)
 			size = len(inlineButtons)/size + 1
 		}
 
-		inlineKeyboard := make([][]models.InlineKeyboardButton, size)
+		inlineKeyboard := make([][]telegram.InlineKeyboardButton, size)
 
 		for i := range inlineKeyboard {
 			size = 3
@@ -292,7 +310,7 @@ func composeKeyboardMarkup(pairs []string) (*models.InlineKeyboardMarkup, error)
 			inlineKeyboard[i], inlineButtons = inlineButtons[:size], inlineButtons[size:]
 		}
 
-		ik, err := models.NewInlineKeyboardMarkup(inlineKeyboard)
+		ik, err := telegram.NewInlineKeyboardMarkup(inlineKeyboard)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return nil, err
@@ -308,7 +326,7 @@ func composeKeyboardMarkup(pairs []string) (*models.InlineKeyboardMarkup, error)
 }
 
 func deleteMsg(client *http.Client, chatID int64, msgID int) bool {
-	data, err := json.Marshal(models.NewDeleteMsgObj(chatID, msgID))
+	data, err := json.Marshal(telegram.NewDeleteMsgObj(chatID, msgID))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return false
@@ -320,7 +338,7 @@ func deleteMsg(client *http.Client, chatID int64, msgID int) bool {
 	}
 	defer resp.Body.Close()
 
-	ok := &models.DeleteResult{}
+	ok := &telegram.DeleteResult{}
 
 	data, err = io.ReadAll(resp.Body)
 	if err != nil {
