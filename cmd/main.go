@@ -74,7 +74,7 @@ func main() {
 	mux.HandleFunc("/update", createUpdate(dialer, client, ctx, coll))
 
 	server := &http.Server{
-		Addr:        os.Getenv("PORT"),
+		Addr:        fmt.Sprintf(":%s", port),
 		Handler:     mux,
 		ReadTimeout: 10 * time.Second,
 		// WriteTimeout: 10 * time.Second,
