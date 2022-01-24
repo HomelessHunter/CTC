@@ -34,6 +34,12 @@ var (
 )
 
 func main() {
+	port := os.Getenv("PORT")
+
+	if port == "" {
+		log.Fatal("$PORT must be set")
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	dialer := &websocket.Dialer{
 		NetDialContext:   (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
@@ -67,11 +73,6 @@ func main() {
 	mux.HandleFunc(fmt.Sprintf("/%s", os.Getenv("TG")), updateFromTG)
 	mux.HandleFunc("/update", createUpdate(dialer, client, ctx, coll))
 
-	// port := os.Getenv("PORT")
-
-	// if port == "" {
-	// 	port = ":8080"
-	// }
 	server := &http.Server{
 		Addr:        os.Getenv("PORT"),
 		Handler:     mux,
