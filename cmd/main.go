@@ -15,6 +15,7 @@ import (
 	"os/signal"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/HomelessHunter/CTC/db"
@@ -82,9 +83,10 @@ func main() {
 	}
 
 	go func() {
-		sigint := make(chan os.Signal, 1)
-		signal.Notify(sigint, os.Interrupt)
-		<-sigint
+		sigs := make(chan os.Signal, 1)
+		signal.Notify(sigs, syscall.SIGTERM, os.Interrupt)
+		<-sigs
+		db.DeleteUserByID(coll, 1, ctx)
 
 		if err := server.Shutdown(context.Background()); err != nil {
 			log.Printf("HTTP server Shutdown: %v", err)
@@ -101,7 +103,6 @@ func main() {
 		fmt.Fprintln(os.Stderr, "cannot create user")
 	}
 	db.InsertNewUser(coll, user, ctx)
-	defer db.DeleteUserByID(coll, 1, ctx)
 
 	if err := server.ListenAndServe(); err != nil {
 		mongoClient.Disconnect(ctx)
