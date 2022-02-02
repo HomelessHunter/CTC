@@ -1,7 +1,7 @@
 package models
 
 type TickerBinance struct {
-	Stream string       `json:"-"`
+	Stream string       `json:"stream"`
 	Data   StreamDataBi `json:"data"`
 }
 
@@ -9,20 +9,34 @@ func NewTickerBi() *TickerBinance {
 	return &TickerBinance{}
 }
 
-func (ticker *TickerBinance) GetClosePrice() string {
-	return ticker.Data.Close
+func (ticker *TickerBinance) GetLastPrice() string {
+	return ticker.Data.LastPrice
 }
 
 type StreamDataBi struct {
-	Type     string `json:"e"`
-	Time     int    `json:"E"`
-	Symbol   string `json:"s"`
-	Close    string `json:"c"`
-	Open     string `json:"o"`
-	High     string `json:"h"`
-	Low      string `json:"l"`
-	BaseVol  string `json:"v"`
-	QuoteVol string `json:"q"`
+	Type                string `json:"e"`
+	Time                int    `json:"E"`
+	Symbol              string `json:"s"`
+	PriceChange         string `json:"p"`
+	PriceChangePercent  string `json:"P"`
+	WeightedAvgPrice    string `json:"w"`
+	FirstTrade          string `json:"x"`
+	LastPrice           string `json:"c"`
+	LastQuantity        string `json:"Q"`
+	BestBidPrice        string `json:"b"`
+	BestBidQuantity     string `json:"B"`
+	BestAskPrice        string `json:"a"`
+	BestAskQuantity     string `json:"A"`
+	Open                string `json:"o"`
+	High                string `json:"h"`
+	Low                 string `json:"l"`
+	BaseVol             string `json:"v"`
+	QuoteVol            string `json:"q"`
+	OpenTime            int    `json:"O"`
+	CloseTime           int    `json:"C"`
+	FirstTradeId        int    `json:"F"`
+	LastTradeId         int    `json:"L"`
+	TotalNumberOfTrades int    `json:"n"`
 }
 
 type LatestTickerBi struct {
