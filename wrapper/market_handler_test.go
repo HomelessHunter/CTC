@@ -53,7 +53,7 @@ func TestConnectHuobi(t *testing.T) {
 	defer zr.Close()
 
 	ticker := &cryptoMarkets.TickerHuobi{}
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 10; i++ {
 		zr.Multistream(false)
 		_, data, err = conn.ReadMessage()
 		if err != nil {
@@ -85,4 +85,70 @@ func TestParsePairsHu(t *testing.T) {
 			t.Errorf("Slices are not equal")
 		}
 	}
+}
+
+func TestBinanceConnection(t *testing.T) {
+	dialer := &websocket.Dialer{
+		NetDialContext:   (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
+		HandshakeTimeout: 10 * time.Second,
+		ReadBufferSize:   256,
+		WriteBufferSize:  256,
+	}
+
+	pairs := []string{"btcbusd", "ethbusd", "bnbbusd"}
+	conn, err := ConnectBinance(dialer, pairs)
+	if err != nil {
+		t.Error(err)
+	}
+	defer conn.Close()
+	ticker := cryptoMarkets.NewTickerBi()
+	closeCh := make(chan int)
+	streamCh := make(chan int, 1)
+
+	readStream := func(ticker *cryptoMarkets.TickerBinance) error {
+		err = conn.ReadJSON(ticker)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Symbol: %s, Price: %s\n", ticker.Data.Symbol, ticker.GetLastPrice())
+		streamCh <- 1
+		return nil
+	}
+
+	go func() {
+		for i := 0; i < 100; i++ {
+			err := readStream(ticker)
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	go func() {
+		defer fmt.Println("Closed")
+		for {
+			select {
+			case <-streamCh:
+				fmt.Println("ok")
+			case <-time.After(5 * time.Second):
+				closeCh <- 1
+				return
+			}
+		}
+	}()
+
+	<-time.After(2 * time.Second)
+	if err = SubscribeBi(conn, "solbusd"); err != nil {
+		t.Error(err)
+	}
+
+	<-time.After(6 * time.Second)
+	pairs = []string{"btcbusd", "ethbusd", "bnbbusd", "solbusd"}
+	for _, v := range pairs {
+		if err = UnsubBi(conn, v); err != nil {
+			t.Error(err)
+		}
+	}
+
+	<-closeCh
 }

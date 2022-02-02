@@ -22,11 +22,6 @@ func TickerConnect(market string, pairs []string, dialer *websocket.Dialer, clie
 		return nil, errors.New("pairs shouldn't be empty")
 	}
 
-	// if market, err = GetMarket(pairs[len(pairs)-1], client); err != nil {
-	// 	fmt.Fprint(os.Stderr, "Symbol doesn't exist")
-	// 	return nil, "", err
-	// }
-
 	switch market {
 	case Huobi:
 		return ConnectHuobi(dialer, pairs)
@@ -35,6 +30,38 @@ func TickerConnect(market string, pairs []string, dialer *websocket.Dialer, clie
 	}
 
 	return nil, fmt.Errorf("no suck market %s", market)
+}
+
+func Subscribe(conn *websocket.Conn, pair string, market string) error {
+	switch market {
+	case Huobi:
+		err := SubscribeHu(conn, pair)
+		if err != nil {
+			return err
+		}
+	case Binance:
+		err := SubscribeBi(conn, pair)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func Unsubscribe(conn *websocket.Conn, pair string, market string) error {
+	switch market {
+	case Huobi:
+		err := UnsubHu(conn, pair)
+		if err != nil {
+			return err
+		}
+	case Binance:
+		err := UnsubBi(conn, pair)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func ConnectHuobi(dialer *websocket.Dialer, pairs []string) (*websocket.Conn, error) {
@@ -46,6 +73,7 @@ func ConnectHuobi(dialer *websocket.Dialer, pairs []string) (*websocket.Conn, er
 	for _, v := range parsePairsHu(pairs) {
 		err = conn.WriteJSON(map[string]string{
 			"sub": v,
+			"id":  "id1",
 		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Huobi_WriteJSON: %s", err)
@@ -55,28 +83,91 @@ func ConnectHuobi(dialer *websocket.Dialer, pairs []string) (*websocket.Conn, er
 	return conn, nil
 }
 
+func SubscribeHu(conn *websocket.Conn, pair string) error {
+	err := conn.WriteJSON(map[string]string{
+		"sub": parsePairHu(pair),
+		"id":  "id1",
+	})
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func UnsubHu(conn *websocket.Conn, pair string) error {
+	err := conn.WriteJSON(map[string]string{
+		"unsub": parsePairHu(pair),
+		"id":    "id1",
+	})
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func parsePairsHu(pairs []string) []string {
+	for i, v := range pairs {
+		pairs[i] = parsePairHu(v)
+	}
+	return pairs
+}
+
+func parsePairHu(pair string) string {
+	return fmt.Sprintf("market.%s.ticker", pair)
+}
+
 func ConnectBinance(dialer *websocket.Dialer, pairs []string) (*websocket.Conn, error) {
-	conn, _, err := dialer.Dial(fmt.Sprintf("wss://stream.binance.com:9443/stream?streams=%s", parsePairsBi(pairs)), nil)
+	conn, _, err := dialer.Dial("wss://stream.binance.com:9443/stream", nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Binance_Dialer_ERR: %s", err)
+		return nil, err
+	}
+
+	err = conn.WriteJSON(map[string]interface{}{
+		"method": "SUBSCRIBE",
+		"params": parsePairsBi(pairs),
+		"id":     0,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Binance_WriteJSON: %s", err)
 		return nil, err
 	}
 	return conn, nil
 }
 
-func parsePairsHu(pairs []string) []string {
+func SubscribeBi(conn *websocket.Conn, pair string) error {
+	err := conn.WriteJSON(map[string]interface{}{
+		"method": "SUBSCRIBE",
+		"params": []string{parsePairBi(pair)},
+		"id":     0,
+	})
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func UnsubBi(conn *websocket.Conn, pair string) error {
+	err := conn.WriteJSON(map[string]interface{}{
+		"method": "UNSUBSCRIBE",
+		"params": []string{parsePairBi(pair)},
+		"id":     0,
+	})
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func parsePairsBi(pairs []string) []string {
 	for i, v := range pairs {
-		pairs[i] = fmt.Sprintf("market.%s.ticker", v)
+		pairs[i] = parsePairBi(v)
 	}
 	return pairs
 }
 
-func parsePairsBi(pairs []string) string {
-	if len(pairs) == 1 {
-		return pairs[0] + "@miniTicker"
-	} else {
-		return strings.Join(pairs, "@miniTicker/") + "@miniTicker"
-	}
+func parsePairBi(pair string) string {
+	return fmt.Sprintf("%s@ticker", pair)
 }
 
 func GetMarket(pair string, client *http.Client) (string, error) {
@@ -86,8 +177,8 @@ func GetMarket(pair string, client *http.Client) (string, error) {
 		return Huobi, nil
 	}
 
-	avgPriceBi, err := LatestPriceBi(pair, client)
-	if err == nil && avgPriceBi.Msg == "" {
+	latestPriceBi, err := LatestPriceBi(pair, client)
+	if err == nil && latestPriceBi.Msg == "" {
 		return Binance, nil
 	}
 
@@ -115,13 +206,13 @@ func LatestPriceBi(pair string, client *http.Client) (*cryptoMarkets.LatestTicke
 		fmt.Fprintf(os.Stderr, "AvgPriceBi: %s", err)
 		return nil, err
 	}
-	avgPrice := &cryptoMarkets.LatestTickerBi{}
-	err = json.Unmarshal(data, avgPrice)
+	latestPrice := &cryptoMarkets.LatestTickerBi{}
+	err = json.Unmarshal(data, latestPrice)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "AvgPriceBi: %s", err)
 		return nil, err
 	}
-	return avgPrice, nil
+	return latestPrice, nil
 }
 
 func LatestPriceHu(pairs string, client *http.Client) (*cryptoMarkets.LatestTickerHu, error) {
