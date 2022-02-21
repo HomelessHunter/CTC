@@ -43,90 +43,102 @@ func SetWebhook(client *http.Client) {
 	fmt.Fprintln(os.Stdout, string(data))
 }
 
-func CommandRouter(command string, regs map[string]*regexp.Regexp,
-	update *telegram.Update, client *http.Client, pairs []string) (*other.WSQuery, string, error) {
+func CommandRouter(command string, regs map[string]*regexp.Regexp) string {
 
 	switch {
 	case regs["start"].MatchString(command):
-		msg, err := telegram.NewMsg(telegram.WithMsgText("Hello"), telegram.WithMsgChat(update.FromChat()))
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return nil, "", err
-		}
-
-		sendMsg(client, msg, false)
+		return "start"
 
 	case regs["alert"].MatchString(command):
-		c := regs["splitter"].Split(command, 3)
-		price, err := strconv.ParseFloat(c[2], 32)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return nil, "", err
-		}
-		market, err := GetMarket(c[1], client)
-		if err != nil {
-			return nil, "", err
-		}
-
-		wsQuery, err := other.NewWsQuery(
-			other.WithWSUserId(update.FromUser().ID()),
-			other.WithWSChatId(update.FromChat().ID()),
-			other.WithWSMarket(market),
-			other.WithWSPair(c[1]),
-			other.WithWSPrice(float32(price)),
-		)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return nil, "", err
-		}
-
-		return wsQuery, "alert", nil
+		return "alert"
 
 	case regs["disconnect"].MatchString(command):
-
-		ik, err := composeKeyboardMarkup(pairs)
-		if err != nil {
-
-			if err == ErrEmptyPairs {
-				msg, err := telegram.NewMsg(
-					telegram.WithMsgId(update.Id),
-					telegram.WithMsgChat(update.FromChat()),
-					telegram.WithMsgText("You have no alerts"),
-				)
-				if err != nil {
-					fmt.Fprintln(os.Stderr, err)
-					return nil, "", err
-				}
-				sendNDiscardMsg(client, msg, false, 2)
-				return nil, "", err
-			}
-
-			fmt.Fprintln(os.Stderr, err)
-			return nil, "", err
-		}
-		sendDisconnectMsg(client, update.FromChat(), ik)
-
+		return "disconnect"
 	}
-	return nil, "", fmt.Errorf("no such command %s", command)
+	return ""
 }
 
-func CallbackHandler(client *http.Client, update *telegram.Update, regs map[string]*regexp.Regexp) (*telegram.CallbackQuery, string, error) {
-	switch {
-	case regs["disconnect"].MatchString(update.GetCallbackData()):
-		fmt.Println("CallbackHandler", update.CallbackQuery.From)
-		callbackData := regs["splitter"].Split(update.GetCallbackData(), 2)[1]
-		market, err := GetMarket(callbackData, client)
-		if err != nil {
-			return nil, "", err
-		}
-		update.CallbackQuery.SetData(fmt.Sprintf("%s %s", callbackData, market))
-
-		return &update.CallbackQuery, "disconnect", nil
-
-	default:
-
+func StartRouter(update *telegram.Update, client *http.Client) error {
+	msg, err := telegram.NewMsg(telegram.WithMsgText("Hello"), telegram.WithMsgChat(update.FromChat()))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return err
 	}
-	return nil, "", fmt.Errorf("no handler for such callback %s", update.GetCallbackData())
+
+	sendMsg(client, *msg, false)
+	return nil
+}
+
+func AlertRouter(command string, regs map[string]*regexp.Regexp, update *telegram.Update, client *http.Client) (*other.WSQuery, error) {
+	c := regs["splitter"].Split(command, 3)
+	price, err := strconv.ParseFloat(c[2], 32)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return nil, err
+	}
+	market, err := GetMarket(c[1], client)
+	if err != nil {
+		return nil, err
+	}
+
+	wsQuery, err := other.NewWsQuery(
+		other.WithWSUserId(update.FromUser().ID()),
+		other.WithWSChatId(update.FromChat().ID()),
+		other.WithWSMarket(market),
+		other.WithWSPair(c[1]),
+		other.WithWSPrice(float32(price)),
+	)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return nil, err
+	}
+	return wsQuery, nil
+}
+
+func DisconnectRouter(update *telegram.Update, pairs []string, client *http.Client) error {
+	ik, err := composeKeyboardMarkup(pairs)
+	if err != nil {
+
+		if err == ErrEmptyPairs {
+			msg, err := telegram.NewMsg(
+				telegram.WithMsgId(update.Id),
+				telegram.WithMsgChat(update.FromChat()),
+				telegram.WithMsgText("You have no alerts"),
+			)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return err
+			}
+			sendNDiscardMsg(client, *msg, false, 2)
+			return err
+		}
+
+		fmt.Fprintln(os.Stderr, err)
+		return err
+	}
+	sendDisconnectMsg(client, update.FromChat(), ik)
+	return nil
+}
+
+func CallbackHandler(client *http.Client, callbackData string, regs map[string]*regexp.Regexp) string {
+	switch {
+	case regs["disconnect"].MatchString(callbackData):
+		return "disconnect"
+	default:
+		return ""
+	}
+}
+
+func DisconnectCallback(update *telegram.Update, regs map[string]*regexp.Regexp, client *http.Client) (*telegram.CallbackQuery, error) {
+	fmt.Println("CallbackHandler", update.CallbackQuery.From)
+	callbackData := regs["splitter"].Split(update.GetCallbackData(), 2)[1]
+	market, err := GetMarket(callbackData, client)
+	if err != nil {
+		return nil, err
+	}
+	update.CallbackQuery.SetData(fmt.Sprintf("%s %s", callbackData, market))
+
+	return &update.CallbackQuery, nil
 }
 
 func SplitCallbackData(data string) (pair string, market string) {
@@ -136,22 +148,22 @@ func SplitCallbackData(data string) (pair string, market string) {
 	return
 }
 
-func SendCallbackAnswer(client *http.Client, callbackAnswer *telegram.CallbackAnswer) {
+func SendCallbackAnswer(client *http.Client, callbackAnswer *telegram.CallbackAnswer) error {
 	data, err := json.Marshal(callbackAnswer)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return
+		return err
 	}
 
 	body := bytes.NewReader(data)
 	_, err = client.Post(fmt.Sprintf("https://api.telegram.org/bot%s/answerCallbackQuery", os.Getenv("TG")), "application/json", body)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		return
+		return err
 	}
+	return nil
 }
 
-func sendMsg(client *http.Client, msg *telegram.Message, notify bool) *telegram.Message {
+func sendMsg(client *http.Client, msg telegram.Message, notify bool) *telegram.Message {
 	sendObj, err := telegram.NewSendMsgObj(
 		telegram.WithSendChatId(msg.FromChatID()),
 		telegram.WithSendText(msg.Text),
@@ -201,7 +213,7 @@ func sendMsg(client *http.Client, msg *telegram.Message, notify bool) *telegram.
 	return &responseMsg.Result
 }
 
-func sendNDiscardMsg(client *http.Client, msg *telegram.Message, notify bool, cacheTimer int) {
+func sendNDiscardMsg(client *http.Client, msg telegram.Message, notify bool, cacheTimer int) {
 	respMsg := sendMsg(client, msg, notify)
 	<-time.After(time.Duration(cacheTimer) * time.Second)
 	deleteMsg(client, respMsg.FromChatID(), respMsg.Id)
@@ -220,7 +232,7 @@ func sendDisconnectMsg(client *http.Client, chat *telegram.Chat, ik *telegram.In
 		return
 	}
 
-	sendMsg(client, msg, false)
+	sendMsg(client, *msg, false)
 }
 
 func EditMarkup(client *http.Client, callback *telegram.CallbackQuery, pairs []string) error {
