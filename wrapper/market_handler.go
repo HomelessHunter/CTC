@@ -65,7 +65,7 @@ func Unsubscribe(conn *websocket.Conn, pair string, market string) error {
 }
 
 func ConnectHuobi(dialer *websocket.Dialer, pairs []string) (*websocket.Conn, error) {
-	conn, _, err := dialer.Dial("wss://api.huobi.pro/ws", nil)
+	conn, _, err := dialer.Dial("wss://api-aws.huobi.pro/ws", nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Huobi_Dialer_ERR: %s", err)
 		return nil, err
@@ -81,6 +81,19 @@ func ConnectHuobi(dialer *websocket.Dialer, pairs []string) (*websocket.Conn, er
 		}
 	}
 	return conn, nil
+}
+
+func CheckPingHuobi(conn *websocket.Conn, data []byte) error {
+	ping := cryptoMarkets.NewPing()
+	err := json.Unmarshal(data, ping)
+	if err != nil {
+		return nil
+	}
+	if ping.Ping > 0 {
+		pongMsg := fmt.Sprintf("{\"pong\": %d}", ping.Ping)
+		conn.WriteMessage(websocket.TextMessage, []byte(pongMsg))
+	}
+	return nil
 }
 
 func SubscribeHu(conn *websocket.Conn, pair string) error {
