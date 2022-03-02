@@ -23,7 +23,7 @@ func TestConnectHuobi(t *testing.T) {
 		WriteBufferSize:  256,
 	}
 
-	conn, _, err := dialer.Dial("wss://api.huobi.pro/ws", nil)
+	conn, _, err := dialer.Dial("wss://api-aws.huobi.pro/ws", nil)
 	if err != nil {
 		t.Errorf("Huobi_Dialer_ERR_0: %s", err)
 	}
@@ -42,6 +42,7 @@ func TestConnectHuobi(t *testing.T) {
 
 	var buf bytes.Buffer
 	_, data, err := conn.ReadMessage()
+	fmt.Println(string(data))
 	if err != nil {
 		t.Errorf("Huobi_Dialer_ERR_2: %s", err)
 	}
@@ -53,16 +54,28 @@ func TestConnectHuobi(t *testing.T) {
 	defer zr.Close()
 
 	ticker := &cryptoMarkets.TickerHuobi{}
-	for i := 0; i < 10; i++ {
+	type Ping struct {
+		Ping int64 `json:"ping"`
+	}
+	ping := &Ping{}
+	for {
 		zr.Multistream(false)
 		_, data, err = conn.ReadMessage()
 		if err != nil {
 			t.Errorf("Huobi_Dialer_ERR_4: %s", err)
 		}
+
 		buf.Write(data)
 		data, err = io.ReadAll(zr)
 		if err != nil {
 			t.Errorf("Huobi_Dialer_ERR_5: %s", err)
+		}
+		err = json.Unmarshal(data, ping)
+		if err == nil {
+			if ping.Ping > 0 {
+				pongMsg := fmt.Sprintf("{\"pong\": %d}", ping.Ping)
+				conn.WriteMessage(websocket.TextMessage, []byte(pongMsg))
+			}
 		}
 		err = json.Unmarshal(data, ticker)
 		if err != nil {
