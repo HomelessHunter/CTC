@@ -6,6 +6,10 @@ type TickerHuobi struct {
 	StreamDataHu StreamDataHu `json:"tick"`
 }
 
+func NewTickerHuobi() *TickerHuobi {
+	return &TickerHuobi{}
+}
+
 func (ticker *TickerHuobi) GetLastPrice() float32 {
 	return ticker.StreamDataHu.LastPrice
 }
@@ -35,6 +39,14 @@ type LatestTickerHu struct {
 
 func (latestTicker *LatestTickerHu) GetClosePrice() float32 {
 	return latestTicker.LatestData.Close
+}
+
+type Ping struct {
+	Ping int64 `json:"ping"`
+}
+
+func NewPing() *Ping {
+	return &Ping{}
 }
 
 type LatestDataHu struct {
