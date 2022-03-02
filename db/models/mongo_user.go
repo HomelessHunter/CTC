@@ -2,6 +2,8 @@ package db
 
 import (
 	"errors"
+	"fmt"
+	"sort"
 	"time"
 )
 
@@ -12,6 +14,10 @@ type MongoUser struct {
 	Timestamp time.Time `bson:"timestamp"`
 }
 
+func (user *MongoUser) String() string {
+	return fmt.Sprintf("UserID: %d\nChatID: %d\nAlerts: %v\nTimestamp: %v\n", user.UsedID, user.ChatID, user.Alerts, user.Timestamp)
+}
+
 func NewMongoUser(opts ...MongoUserOpts) (*MongoUser, error) {
 	user := MongoUser{}
 	for _, opt := range opts {
@@ -20,7 +26,7 @@ func NewMongoUser(opts ...MongoUserOpts) (*MongoUser, error) {
 			return nil, err
 		}
 	}
-	user.Timestamp = time.Now()
+	user.Timestamp = time.Now().In(time.UTC)
 
 	return &user, nil
 }
@@ -64,6 +70,11 @@ type Alert struct {
 	Market      string  `bson:"market"`
 	Pair        string  `bson:"pair"`
 	TargetPrice float32 `bson:"target_price"`
+	Connected   bool    `bson:"connected"`
+}
+
+func (alert *Alert) String() string {
+	return fmt.Sprintf("Market: %s, Pair: %s, TargetPrice: %f", alert.Market, alert.Pair, alert.TargetPrice)
 }
 
 func NewAlert(opts ...MongoAlertOpts) (*Alert, error) {
@@ -76,6 +87,20 @@ func NewAlert(opts ...MongoAlertOpts) (*Alert, error) {
 	}
 
 	return &alert, nil
+}
+
+func (alert *Alert) Find(alerts []Alert) (int, error) {
+	sort.Slice(alerts, func(i, j int) bool {
+		return alerts[i].Pair <= alerts[j].Pair
+	})
+	i := sort.Search(len(alerts), func(i int) bool {
+		return alerts[i].Pair >= alert.Pair && alerts[i].Market >= alert.Market
+	})
+	if i < len(alerts) && alerts[i].Pair == alert.Pair {
+		return i, nil
+	}
+
+	return 0, fmt.Errorf("no alert with index: %d", i)
 }
 
 type MongoAlertOpts func(*Alert) error
@@ -109,6 +134,13 @@ func WithTargetPrice(targetPrice float32) MongoAlertOpts {
 		}
 
 		a.TargetPrice = targetPrice
+		return nil
+	}
+}
+
+func WithConnected(connected bool) MongoAlertOpts {
+	return func(a *Alert) error {
+		a.Connected = connected
 		return nil
 	}
 }
