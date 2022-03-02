@@ -6,27 +6,23 @@ import (
 )
 
 type UserChannels struct {
-	chatId int64
-	pairs  []string
 	cancel map[string]context.CancelFunc
 	// ShutdownCh is giving a signal to close current websocket connection completely
 	shutdownCh map[string]chan int
-	// ReconnectCh is giving a signal to close current connection and reconnect with new values
-	reconnectCh map[string]chan int
-	// addPairCh is giving a signal about pair appending
-	addPairCh map[string]chan int
+	// subscribeCh is giving a signal about subscribing a new pair
+	subscribeCh map[string]chan PairSignal
+	// unsubscribeCh is givin a signal about unsubscribing a pair
+	unsubscribeCh map[string]chan PairSignal
 }
 
 type userChannels struct {
-	ChatId      int64
-	Pairs       []string
-	Cancel      map[string]context.CancelFunc
-	ShutdownCh  map[string]chan int
-	ReconnectCh map[string]chan int
-	addPairCh   map[string]chan int
+	Cancel        map[string]context.CancelFunc
+	ShutdownCh    map[string]chan int
+	SubscribeCh   map[string]chan PairSignal
+	UnsubscribeCh map[string]chan PairSignal
 }
 
-func NewuserChannels(opts ...UserChannelsOpts) (*UserChannels, error) {
+func NewUserChannels(opts ...UserChannelsOpts) (*UserChannels, error) {
 	userChannels := userChannels{}
 
 	for _, opt := range opts {
@@ -36,31 +32,16 @@ func NewuserChannels(opts ...UserChannelsOpts) (*UserChannels, error) {
 		}
 	}
 
-	return &UserChannels{chatId: userChannels.ChatId,
-		pairs:       userChannels.Pairs,
-		cancel:      userChannels.Cancel,
-		shutdownCh:  userChannels.ShutdownCh,
-		reconnectCh: userChannels.ReconnectCh}, nil
+	return &UserChannels{
+		cancel:        userChannels.Cancel,
+		shutdownCh:    userChannels.ShutdownCh,
+		subscribeCh:   userChannels.SubscribeCh,
+		unsubscribeCh: userChannels.UnsubscribeCh,
+	}, nil
 }
 
-func (userChannels *UserChannels) ChatID() int64 {
-	return userChannels.chatId
-}
-
-func (userChannels *UserChannels) SetChatID(chatId int64) {
-	userChannels.chatId = chatId
-}
-
-func (userChannels *UserChannels) Pairs() []string {
-	return userChannels.pairs
-}
-
-func (userChannels *UserChannels) SetPairs(pairs []string) {
-	userChannels.pairs = pairs
-}
-
-func (userChannels *UserChannels) AddPairs(pair ...string) []string {
-	return append(userChannels.pairs, pair...)
+func (userChannels *UserChannels) AssignCancel(cancels map[string]context.CancelFunc) {
+	userChannels.cancel = cancels
 }
 
 func (userChannels *UserChannels) GetCancel() map[string]context.CancelFunc {
@@ -75,6 +56,10 @@ func (userChannels *UserChannels) Cancel(market string) {
 	userChannels.cancel[market]()
 }
 
+func (userChannels *UserChannels) AssignShutdown(shutdowns map[string]chan int) {
+	userChannels.shutdownCh = shutdowns
+}
+
 func (userChannels *UserChannels) ShutdownCh(market string) chan int {
 	return userChannels.shutdownCh[market]
 }
@@ -87,53 +72,44 @@ func (userChannels *UserChannels) Shutdown(market string) {
 	userChannels.shutdownCh[market] <- 1
 }
 
-func (userChannels *UserChannels) ReconnectCh(market string) chan int {
-	return userChannels.reconnectCh[market]
+func (userChannels *UserChannels) AssignSubscribe(subscribes map[string]chan PairSignal) {
+	userChannels.subscribeCh = subscribes
 }
 
-func (userChannels *UserChannels) SetReconnectCh(market string, ch chan int) {
-	userChannels.reconnectCh[market] = ch
+func (userChannels *UserChannels) SubscribeCh(market string) chan PairSignal {
+	return userChannels.subscribeCh[market]
 }
 
-func (userChannels *UserChannels) Reconnect(market string) {
-	userChannels.reconnectCh[market] <- 1
+func (userChannels *UserChannels) SetSubscriberCh(market string, subscribeCh chan PairSignal) {
+	userChannels.subscribeCh[market] = subscribeCh
 }
 
-func (userChannels *UserChannels) AddPairCh(market string) chan int {
-	return userChannels.addPairCh[market]
+func (userChannels *UserChannels) SubscribeSignal(market string, pair PairSignal) {
+	userChannels.subscribeCh[market] <- pair
 }
 
-func (userChannels *UserChannels) SetAddPairCh(market string, addPairCh chan int) {
-	userChannels.addPairCh[market] = addPairCh
+func (userChannels *UserChannels) AssignUnsub(unsubs map[string]chan PairSignal) {
+	userChannels.unsubscribeCh = unsubs
 }
 
-func (userChannels *UserChannels) AddPairSignal(market string) {
-	userChannels.addPairCh[market] <- 1
+func (userChannels *UserChannels) UnsubscribeCh(market string) chan PairSignal {
+	return userChannels.unsubscribeCh[market]
+}
+
+func (userChannels *UserChannels) SetUnsubscriberCh(market string, unsubscribeCh chan PairSignal) {
+	userChannels.unsubscribeCh[market] = unsubscribeCh
+}
+
+func (userChannels *UserChannels) UnsubscribeSignal(market string, pair PairSignal) {
+	userChannels.unsubscribeCh[market] <- pair
+}
+
+type PairSignal struct {
+	Pair string
+	Size int
 }
 
 type UserChannelsOpts func(*userChannels) error
-
-func WithUCChatId(chatId int64) UserChannelsOpts {
-	return func(uc *userChannels) error {
-		if chatId < 0 {
-			return errors.New("chatId should be positive")
-		}
-
-		uc.ChatId = chatId
-		return nil
-	}
-}
-
-func WithUCPairs(pairs []string) UserChannelsOpts {
-	return func(uc *userChannels) error {
-		if len(pairs) == 0 {
-			return errors.New("pairs shouldn't be empty")
-		}
-
-		uc.Pairs = pairs
-		return nil
-	}
-}
 
 func WithUCCancel(cancel map[string]context.CancelFunc) UserChannelsOpts {
 	return func(uc *userChannels) error {
@@ -153,16 +129,16 @@ func WithUCShutdown(shutdownCh map[string]chan int) UserChannelsOpts {
 	}
 }
 
-func WithUCReconnect(reconnectCh map[string]chan int) UserChannelsOpts {
+func WithUCSubscribeCh(subscribeCh map[string]chan PairSignal) UserChannelsOpts {
 	return func(uc *userChannels) error {
-		uc.ReconnectCh = reconnectCh
+		uc.SubscribeCh = subscribeCh
 		return nil
 	}
 }
 
-func WithUCAddPairCh(addPairCh map[string]chan int) UserChannelsOpts {
+func WithUCUnsubscribeCh(unsubscribeCh map[string]chan PairSignal) UserChannelsOpts {
 	return func(uc *userChannels) error {
-		uc.addPairCh = addPairCh
+		uc.UnsubscribeCh = unsubscribeCh
 		return nil
 	}
 }
