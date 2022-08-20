@@ -4,10 +4,10 @@ import "errors"
 
 type InlineKeyboardButton struct {
 	Text              string `json:"text"`
-	Url               string `json:"url,omitempty"`
-	CallbackData      string `json:"callback_data,omitempty"`
-	SwitchInlineQuery string `json:"switch_inline_query,omitempty"`
-	SIQCurrentChat    string `json:"switch_inline_query_current_chat,omitempty"`
+	Url               string `json:"url"`
+	CallbackData      string `json:"callback_data"`
+	SwitchInlineQuery string `json:"switch_inline_query"`
+	SIQCurrentChat    string `json:"switch_inline_query_current_chat"`
 }
 
 func NewInlineKeyboardButton(opts ...IKBOptions) (*InlineKeyboardButton, error) {

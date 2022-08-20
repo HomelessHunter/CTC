@@ -123,7 +123,8 @@ func TestBinanceConnection(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("Symbol: %s, Price: %s\n", ticker.Data.Symbol, ticker.GetLastPrice())
+		lastPrice, _ := ticker.GetLastPrice()
+		fmt.Printf("Symbol: %s, Price: %f\n", ticker.Data.Symbol, lastPrice)
 		streamCh <- 1
 		return nil
 	}

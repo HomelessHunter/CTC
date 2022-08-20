@@ -1,6 +1,7 @@
 package db
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sort"
@@ -67,10 +68,12 @@ func WithAlerts(alerts ...Alert) MongoUserOpts {
 }
 
 type Alert struct {
-	Market      string  `bson:"market"`
-	Pair        string  `bson:"pair"`
-	TargetPrice float32 `bson:"target_price"`
-	Connected   bool    `bson:"connected"`
+	Market      string    `bson:"market"`
+	Pair        string    `bson:"pair"`
+	TargetPrice float64   `bson:"target_price"`
+	Connected   bool      `bson:"connected"`
+	LastSignal  time.Time `bson:"last_signal,omitempty"`
+	Hex         string    `bson:"hex"`
 }
 
 func (alert *Alert) String() string {
@@ -86,21 +89,59 @@ func NewAlert(opts ...MongoAlertOpts) (*Alert, error) {
 		}
 	}
 
+	alert.Hex = hex.EncodeToString([]byte(alert.Market + alert.Pair))
+
 	return &alert, nil
 }
 
-func (alert *Alert) Find(alerts []Alert) (int, error) {
+func (alert *Alert) SetLastSignal(lastSignal time.Time) {
+	alert.LastSignal = lastSignal
+}
+
+func SortByHEX(alerts []Alert) {
 	sort.Slice(alerts, func(i, j int) bool {
-		return alerts[i].Pair <= alerts[j].Pair
+		return alerts[i].Hex < alerts[j].Hex
 	})
+}
+
+func (alert *Alert) SortNFind(alerts []Alert) (int, error) {
+	SortByHEX(alerts)
+	fmt.Println("SORT", alerts)
 	i := sort.Search(len(alerts), func(i int) bool {
-		return alerts[i].Pair >= alert.Pair && alerts[i].Market >= alert.Market
+		return alerts[i].Hex >= alert.Hex
 	})
-	if i < len(alerts) && alerts[i].Pair == alert.Pair {
+	if i < len(alerts) && alerts[i].Hex == alert.Hex {
 		return i, nil
 	}
 
 	return 0, fmt.Errorf("no alert with index: %d", i)
+}
+
+func (alert *Alert) Find(alerts []Alert) (int, error) {
+	i := sort.Search(len(alerts), func(i int) bool {
+		return alerts[i].Hex >= alert.Hex
+	})
+	if i < len(alerts) && alerts[i].Hex == alert.Hex {
+		return i, nil
+	}
+
+	return 0, fmt.Errorf("no alert with index: %d", i)
+}
+
+func SortByMarket(alerts []Alert) {
+	sort.Slice(alerts, func(i, j int) bool {
+		return alerts[i].Market < alerts[j].Market
+	})
+}
+
+func AlertExist(alerts []Alert, market string) bool {
+	i := sort.Search(len(alerts), func(i int) bool {
+		return alerts[i].Market >= market
+	})
+	if i < len(alerts) && alerts[i].Market == market {
+		return true
+	}
+	return false
 }
 
 type MongoAlertOpts func(*Alert) error
@@ -127,7 +168,7 @@ func WithPair(pair string) MongoAlertOpts {
 	}
 }
 
-func WithTargetPrice(targetPrice float32) MongoAlertOpts {
+func WithTargetPrice(targetPrice float64) MongoAlertOpts {
 	return func(a *Alert) error {
 		if targetPrice < 0 {
 			return errors.New("targerPrice should be positive")
@@ -141,6 +182,26 @@ func WithTargetPrice(targetPrice float32) MongoAlertOpts {
 func WithConnected(connected bool) MongoAlertOpts {
 	return func(a *Alert) error {
 		a.Connected = connected
+		return nil
+	}
+}
+
+func WithLastSignal(lastSignal time.Time) MongoAlertOpts {
+	return func(a *Alert) error {
+		if lastSignal.IsZero() {
+			return errors.New("lastSignal shouldn't be 0")
+		}
+		a.LastSignal = lastSignal
+		return nil
+	}
+}
+
+func WithHex(hex string) MongoAlertOpts {
+	return func(a *Alert) error {
+		if hex == "" {
+			return errors.New("hex shouldn't be empty")
+		}
+		a.Hex = hex
 		return nil
 	}
 }

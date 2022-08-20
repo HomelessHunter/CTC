@@ -3,7 +3,32 @@ package models
 import (
 	"context"
 	"errors"
+	"sync"
 )
+
+var ErrEmptyMap = errors.New("userChannels map shouldn't be empty")
+
+type UC struct {
+	mu           sync.RWMutex
+	userChannels map[int64]*UserChannels
+}
+
+func NewUC() *UC {
+	return &UC{userChannels: make(map[int64]*UserChannels)}
+}
+
+func (uc *UC) SetUC(id int64, userChannels *UserChannels) {
+	uc.mu.Lock()
+	defer uc.mu.Unlock()
+	uc.userChannels[id] = userChannels
+}
+
+func (uc *UC) GetUserChannels(id int64) (*UserChannels, bool) {
+	uc.mu.RLock()
+	defer uc.mu.RUnlock()
+	userChannels, ok := uc.userChannels[id]
+	return userChannels, ok
+}
 
 type UserChannels struct {
 	cancel map[string]context.CancelFunc
@@ -40,24 +65,12 @@ func NewUserChannels(opts ...UserChannelsOpts) (*UserChannels, error) {
 	}, nil
 }
 
-func (userChannels *UserChannels) AssignCancel(cancels map[string]context.CancelFunc) {
-	userChannels.cancel = cancels
-}
-
-func (userChannels *UserChannels) GetCancel() map[string]context.CancelFunc {
-	return userChannels.cancel
-}
-
 func (userChannels *UserChannels) SetCancel(market string, cancel context.CancelFunc) {
 	userChannels.cancel[market] = cancel
 }
 
 func (userChannels *UserChannels) Cancel(market string) {
 	userChannels.cancel[market]()
-}
-
-func (userChannels *UserChannels) AssignShutdown(shutdowns map[string]chan int) {
-	userChannels.shutdownCh = shutdowns
 }
 
 func (userChannels *UserChannels) ShutdownCh(market string) chan int {
@@ -68,12 +81,12 @@ func (userChannels *UserChannels) SetShutdownCh(market string, ch chan int) {
 	userChannels.shutdownCh[market] = ch
 }
 
-func (userChannels *UserChannels) Shutdown(market string) {
-	userChannels.shutdownCh[market] <- 1
+func (userChannels *UserChannels) DeleteShutdownCh(market string) {
+	delete(userChannels.shutdownCh, market)
 }
 
-func (userChannels *UserChannels) AssignSubscribe(subscribes map[string]chan PairSignal) {
-	userChannels.subscribeCh = subscribes
+func (userChannels *UserChannels) Shutdown(market string) {
+	userChannels.shutdownCh[market] <- 1
 }
 
 func (userChannels *UserChannels) SubscribeCh(market string) chan PairSignal {
@@ -84,12 +97,12 @@ func (userChannels *UserChannels) SetSubscriberCh(market string, subscribeCh cha
 	userChannels.subscribeCh[market] = subscribeCh
 }
 
-func (userChannels *UserChannels) SubscribeSignal(market string, pair PairSignal) {
-	userChannels.subscribeCh[market] <- pair
+func (userChannels *UserChannels) DeleteSubscribeCh(market string) {
+	delete(userChannels.subscribeCh, market)
 }
 
-func (userChannels *UserChannels) AssignUnsub(unsubs map[string]chan PairSignal) {
-	userChannels.unsubscribeCh = unsubs
+func (userChannels *UserChannels) SubscribeSignal(market string, pair PairSignal) {
+	userChannels.subscribeCh[market] <- pair
 }
 
 func (userChannels *UserChannels) UnsubscribeCh(market string) chan PairSignal {
@@ -98,6 +111,10 @@ func (userChannels *UserChannels) UnsubscribeCh(market string) chan PairSignal {
 
 func (userChannels *UserChannels) SetUnsubscriberCh(market string, unsubscribeCh chan PairSignal) {
 	userChannels.unsubscribeCh[market] = unsubscribeCh
+}
+
+func (userChannels *UserChannels) DeleteUnsubscribeCh(market string) {
+	delete(userChannels.unsubscribeCh, market)
 }
 
 func (userChannels *UserChannels) UnsubscribeSignal(market string, pair PairSignal) {

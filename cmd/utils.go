@@ -8,24 +8,17 @@ import (
 	db "github.com/HomelessHunter/CTC/db/models"
 )
 
-// func pairExist(pair string, pairs []string) bool {
-// 	if i := pairSearch(pairs, pair); i < len(pairs) && i >= 0 {
-// 		if pairs[i] == pair {
-// 			return true
-// 		}
-// 	}
-
-// 	return false
-// }
-
 func pairExist(market, pair string, alerts []db.Alert) bool {
 	if len(alerts) == 0 {
 		return false
 	}
-	alert := db.Alert{Market: market, Pair: pair}
-	_, err := alert.Find(alerts)
+	alert, err := db.NewAlert(db.WithMarket(market), db.WithPair(pair))
 	if err != nil {
-		fmt.Printf("cannot find alert: %s", err)
+		fmt.Println(err)
+		return false
+	}
+	_, err = alert.SortNFind(alerts)
+	if err != nil {
 		return false
 	}
 	return true
@@ -33,9 +26,11 @@ func pairExist(market, pair string, alerts []db.Alert) bool {
 
 func compileRegexp() map[string]*regexp.Regexp {
 	return map[string]*regexp.Regexp{
-		"start":      regexp.MustCompile(`^\/(start)`),
-		"alert":      regexp.MustCompile(`^\/(a|A)(lert)\s[A-Za-z]+\s[0-9]+\.[0-9]+$`),
-		"disconnect": regexp.MustCompile(`^\/*(disconnect)\s*[A-Za-z]*$`),
+		"start":      regexp.MustCompile(`^\/(start)$`),
+		"help":       regexp.MustCompile(`^\/help$`),
+		"alert":      regexp.MustCompile(`^\/(a|A)(lert)\s[A-Za-z]+\s[0-9]+\.*[0-9]*$`),
+		"price":      regexp.MustCompile(`^\/(p|P)rice\s[a-zA-Z]+$`),
+		"disconnect": regexp.MustCompile(`^\/*(disconnect)\s*[A-Za-z]*\s*[A-Za-z]*$`),
 		"splitter":   regexp.MustCompile(`\s`),
 	}
 }
@@ -44,13 +39,15 @@ func findDisconnectAlert(market, pair string, alerts []db.Alert) (int, error) {
 	if len(alerts) == 0 {
 		return -2, errors.New("pairs shouldn't be empty")
 	}
-	switch pair {
-	case "all":
+
+	if pair == "all" || market == "all" {
 		return -1, nil
-	default:
-		alert := db.Alert{Market: market, Pair: pair}
-		return alert.Find(alerts)
 	}
+	alert, err := db.NewAlert(db.WithMarket(market), db.WithPair(pair))
+	if err != nil {
+		return -2, err
+	}
+	return alert.SortNFind(alerts)
 }
 
 // func pairSearch(pairs []string, pair string) int {

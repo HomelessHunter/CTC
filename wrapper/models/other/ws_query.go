@@ -7,7 +7,7 @@ type WSQuery struct {
 	ChatId int64   `json:"chat_id"`
 	Market string  `json:"market"`
 	Pair   string  `json:"pair"`
-	Price  float32 `json:"price"`
+	Price  float64 `json:"price"`
 }
 
 func NewWsQuery(opts ...WSQueryOpts) (*WSQuery, error) {
@@ -73,7 +73,7 @@ func WithWSPair(pair string) WSQueryOpts {
 	}
 }
 
-func WithWSPrice(price float32) WSQueryOpts {
+func WithWSPrice(price float64) WSQueryOpts {
 	return func(w *WSQuery) error {
 		if price < 0 {
 			return errors.New("price should be positive")

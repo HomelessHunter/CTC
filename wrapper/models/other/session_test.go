@@ -29,12 +29,12 @@ func TestMapAllocation(t *testing.T) {
 	alertT, _ := dbModels.NewAlert(dbModels.WithPair(fmt.Sprint(100)), dbModels.WithMarket("binance"))
 	alertT1, _ := dbModels.NewAlert(dbModels.WithPair(fmt.Sprint(876)), dbModels.WithMarket("binance"))
 	alerts := *session.alerts[1]
-	i, err := alertT.Find(alerts)
+	i, err := alertT.SortNFind(alerts)
 	if err != nil {
 		t.Error(err)
 	}
 	session.DeleteAlert(1, i)
-	in, err := alertT1.Find(alerts)
+	in, err := alertT1.SortNFind(alerts)
 	if err != nil {
 		t.Error(err)
 	}
@@ -73,3 +73,46 @@ func keepFirstTwoElementsOnly(foos []Foo) []Foo {
 	copy(res, foos)
 	return res
 }
+
+func TestSetMarketByID(t *testing.T) {
+	session := NewSession()
+	session.InitMarketsByID(1)
+	session.SetMarketByID(1, "binance", true)
+	if !session.MarketExist(1, "binance") {
+		t.Error("market does not exist")
+	}
+}
+
+func TestDeleteAlert(t *testing.T) {
+	session := NewSession()
+	alert := dbModels.Alert{Market: "binance", Pair: "btcusdt", TargetPrice: 58000.12, Connected: false, Hex: "fex"}
+	session.AddAlerts(1, alert)
+	i, _ := alert.SortNFind(*session.alerts[1])
+	s := *session.alerts[1]
+	fmt.Println(len(s[:1]))
+	fmt.Println(session.alerts[1])
+	err := session.DeleteAlert(1, i)
+	if err != nil {
+		t.Error(err)
+	}
+	fmt.Println(session.alerts[1])
+}
+
+func TestDeleteAlerts(t *testing.T) {
+	session := NewSession()
+	alert := dbModels.Alert{Market: "binance", Pair: "btcusdt", TargetPrice: 58000.12, Connected: false, Hex: "fex"}
+	session.AddAlerts(1, alert)
+	alerts := session.AlertsByID(1)
+	fmt.Println(alerts)
+	session.DeleteAlerts(1, len(alerts))
+	// fmt.Println(session.AlertsByID(1))
+}
+
+// func TestDeleteMarket(t *testing.T) {
+// 	session := NewSession()
+// 	session.InitMarketsByID(1)
+// 	session.DeleteMarket(1, "huobi")
+// 	fmt.Println(session.markets[1])
+// 	session.DeleteMarket(1, "huobi")
+// 	fmt.Println(session.markets[1])
+// }

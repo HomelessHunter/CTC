@@ -15,7 +15,7 @@ import (
 const ID int64 = 1
 
 func prepare() (client *mongo.Client, coll *mongo.Collection, err error) {
-	client, err = mongo.Connect(context.TODO(), options.Client().ApplyURI(os.Getenv("MONGODB_URI")))
+	client, err = mongo.Connect(context.TODO(), options.Client().ApplyURI(os.Getenv("MONGO_URI")))
 	coll = GetUserCollection(client)
 	return
 }
@@ -44,6 +44,7 @@ func TestInsertUser(t *testing.T) {
 	if err != nil {
 		t.Errorf("Cannot create alert %s", err)
 	}
+
 	user, err := db.NewMongoUser(db.WithUserID(ID), db.WithAlerts(*alertBi, *alertHu))
 	if err != nil {
 		t.Errorf("Cannot create user %s", err)
@@ -111,7 +112,6 @@ func TestDisctinct(t *testing.T) {
 	}
 	fmt.Println(result)
 }
-
 func TestRemoveAlert(t *testing.T) {
 	client, coll, err := prepare()
 	if err != nil {
@@ -250,7 +250,7 @@ func TestGetPairsByMarket(t *testing.T) {
 
 	err = prepareForPairsTest(coll)
 
-	pairs, alerts, err := GetPairsByMarket(coll, ID, "binance", true, context.TODO())
+	pairs, alerts, err := GetPairsByMarket(coll, ID, "huobi", false, context.TODO())
 	if err != nil {
 		t.Errorf("Cannot get pairs: %s", err)
 	}
@@ -269,47 +269,6 @@ func TestUpdateAlerts(t *testing.T) {
 	}
 
 	defer func() {
-		err = closeTest(client, coll)
-		if err != nil {
-			t.Error(err)
-		}
-	}()
-
-	err = prepareForPairsTest(coll)
-	_, oldAlerts, err := GetPairsByMarket(coll, ID, "binance", false, context.TODO())
-	if err != nil {
-		t.Error(err)
-	}
-
-	newAlerts := make([]db.Alert, len(oldAlerts))
-	for i, oldAlert := range oldAlerts {
-		oldAlert.Connected = true
-		newAlerts[i] = oldAlert
-	}
-
-	err = UpdateAlerts(coll, ID, oldAlerts, newAlerts, context.TODO())
-	if err != nil {
-		t.Error(err)
-	}
-
-	alerts, err := GetAlerts(coll, ID, context.TODO())
-	if err != nil {
-		t.Error(err)
-	}
-	if !alerts[len(alerts)-1].Connected {
-		t.Errorf("connected field should be true but %v instead", alerts[len(alerts)-1].Connected)
-	}
-
-	fmt.Println(alerts)
-}
-
-func TestDisconnectAlerts(t *testing.T) {
-	client, coll, err := prepare()
-	if err != nil {
-		t.Error(err)
-	}
-
-	defer func() {
 		err = DeleteUserByID(coll, 2, context.TODO())
 		if err != nil {
 			t.Error(err)
@@ -320,15 +279,15 @@ func TestDisconnectAlerts(t *testing.T) {
 		}
 	}()
 
-	// alertBi, _ := db.NewAlert(db.WithPair("ethbusd"), db.WithTargetPrice(54000.0), db.WithMarket("binance"), db.WithConnected(true))
-	// alertBin, _ := db.NewAlert(db.WithPair("btcusdt"), db.WithTargetPrice(54000.0), db.WithMarket("binance"), db.WithConnected(true))
-	// alertHuo, _ := db.NewAlert(db.WithPair("ethusdt"), db.WithTargetPrice(54000.0), db.WithMarket("huobi"))
-	// alertBina, _ := db.NewAlert(db.WithPair("solusdt"), db.WithTargetPrice(54000.0), db.WithMarket("binance"))
-	// user, _ := db.NewMongoUser(db.WithUserID(ID), db.WithAlerts(*alertBi, *alertBin, *alertHuo, *alertBina), db.WithChatID(1))
-	// err = InsertNewUser(coll, user, context.TODO())
-	// if err != nil {
-	// 	t.Error(err)
-	// }
+	alertBi, _ := db.NewAlert(db.WithPair("ethbusd"), db.WithTargetPrice(54000.0), db.WithMarket("binance"), db.WithConnected(true))
+	alertBin, _ := db.NewAlert(db.WithPair("btcusdt"), db.WithTargetPrice(54000.0), db.WithMarket("binance"), db.WithConnected(true))
+	alertHuo, _ := db.NewAlert(db.WithPair("ethusdt"), db.WithTargetPrice(54000.0), db.WithMarket("huobi"))
+	alertBina, _ := db.NewAlert(db.WithPair("solusdt"), db.WithTargetPrice(54000.0), db.WithMarket("binance"))
+	user, _ := db.NewMongoUser(db.WithUserID(ID), db.WithAlerts(*alertBi, *alertBin, *alertHuo, *alertBina), db.WithChatID(1))
+	err = InsertNewUser(coll, user, context.TODO())
+	if err != nil {
+		t.Error(err)
+	}
 
 	alertBi2, _ := db.NewAlert(db.WithPair("ethbusd"), db.WithTargetPrice(4000.0), db.WithMarket("binance"), db.WithConnected(true))
 	alertBin2, _ := db.NewAlert(db.WithPair("btcusdt"), db.WithTargetPrice(54000.0), db.WithMarket("binance"), db.WithConnected(true))
@@ -339,23 +298,70 @@ func TestDisconnectAlerts(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
-	sessionAlerts := map[int64][]db.Alert{2: {*alertBi2, *alertBin2, *alertHuo2, *alertBina2}}
+	sessionAlerts := map[int64]*[]db.Alert{1: {*alertBi, *alertBin, *alertHuo, *alertBina}, 2: {*alertBi2, *alertBin2, *alertHuo2, *alertBina2}}
 
 	err = ShutdownSequence(coll, sessionAlerts, 8, context.TODO())
 	if err != nil {
 		t.Error(err)
 	}
 
-	// firstUser, err := GetUserByID(coll, 1, context.TODO())
-	// if err != nil {
-	// 	t.Error(err)
-	// }
-	// fmt.Println(firstUser.Alerts)
+	firstUser, err := GetUserByID(coll, 1, context.TODO())
+	if err != nil {
+		t.Error(err)
+	}
+	fmt.Println(firstUser.Alerts)
 	secondUser, err := GetUserByID(coll, 2, context.TODO())
 	if err != nil {
 		t.Error(err)
 	}
 	fmt.Println(secondUser.Alerts)
+
+	err = UpdateAlertsSqc(coll, 1, firstUser.Alerts, true, context.TODO())
+	if err != nil {
+		t.Error(err)
+	}
+	firstUser, err = GetUserByID(coll, 1, context.TODO())
+	if err != nil {
+		t.Error(err)
+	}
+	fmt.Println(firstUser.Alerts)
+}
+
+func TestGetUsersWithPairs(t *testing.T) {
+	clien, coll, err := prepare()
+	if err != nil {
+		t.Error(err)
+	}
+	defer func() {
+		err := DeleteUserByID(coll, 2, context.TODO())
+		if err != nil {
+			t.Error(err)
+		}
+		err = closeTest(clien, coll)
+		if err != nil {
+			t.Error(err)
+		}
+	}()
+
+	err = prepareForPairsTest(coll)
+	if err != nil {
+		t.Error(err)
+	}
+	alertBi2, _ := db.NewAlert(db.WithPair("ethbusd"), db.WithTargetPrice(4000.0), db.WithMarket("binance"))
+	alertBin2, _ := db.NewAlert(db.WithPair("btcusdt"), db.WithTargetPrice(54000.0), db.WithMarket("binance"))
+	alertHuo2, _ := db.NewAlert(db.WithPair("ethusdt"), db.WithTargetPrice(4200.0), db.WithMarket("huobi"))
+	alertBina2, _ := db.NewAlert(db.WithPair("solusdt"), db.WithTargetPrice(540.0), db.WithMarket("binance"))
+	user2, _ := db.NewMongoUser(db.WithUserID(2), db.WithAlerts(*alertBi2, *alertBin2, *alertHuo2, *alertBina2))
+	err = InsertNewUser(coll, user2, context.TODO())
+	if err != nil {
+		t.Error(err)
+	}
+
+	users, err := GetUsersWithPairs(coll, false, context.TODO())
+	if err != nil {
+		t.Error(err)
+	}
+	fmt.Println(users)
 }
 
 func TestDeletePairs(t *testing.T) {
@@ -388,7 +394,32 @@ func TestDeletePairs(t *testing.T) {
 
 	_, alerts, err = GetPairsByMarket(coll, ID, "binance", true, context.TODO())
 	if err != nil {
-		t.Errorf("Cannot get pairs: %s", err)
+		fmt.Println(alerts)
+	} else {
+		t.Errorf("Something went wrong: %s", err)
+	}
+}
+
+func TestGetAlerts(t *testing.T) {
+	client, coll, err := prepare()
+	if err != nil {
+		t.Error(err)
+	}
+	defer func() {
+		err = DeleteUserByID(coll, ID, context.TODO())
+		if err != nil {
+			t.Errorf("Cannot delete user %s", err)
+		}
+		client.Disconnect(context.TODO())
+	}()
+	err = prepareForPairsTest(coll)
+	if err != nil {
+		t.Error(err)
+	}
+
+	alerts, err := GetAlerts(coll, 1, context.TODO())
+	if err != nil {
+		t.Error(err)
 	}
 	fmt.Println(alerts)
 }

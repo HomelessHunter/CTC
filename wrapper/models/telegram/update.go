@@ -2,6 +2,15 @@ package models
 
 import "errors"
 
+type WHUpdate struct {
+	Ok     bool   `json:"ok"`
+	Result Update `json:"result"`
+}
+
+func NewWhUpdate() *WHUpdate {
+	return &WHUpdate{}
+}
+
 type TGUpdate struct {
 	IsOK   bool     `json:"ok"`
 	Result []Update `json:"result"`

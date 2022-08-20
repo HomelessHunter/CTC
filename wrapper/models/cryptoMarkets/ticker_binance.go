@@ -1,5 +1,10 @@
 package models
 
+import (
+	"strconv"
+	"strings"
+)
+
 type TickerBinance struct {
 	Stream string       `json:"stream"`
 	Data   StreamDataBi `json:"data"`
@@ -9,8 +14,12 @@ func NewTickerBi() *TickerBinance {
 	return &TickerBinance{}
 }
 
-func (ticker *TickerBinance) GetLastPrice() string {
-	return ticker.Data.LastPrice
+func (ticker *TickerBinance) GetLastPrice() (float64, error) {
+	return strconv.ParseFloat(ticker.Data.LastPrice, 64)
+}
+
+func (ticker *TickerBinance) GetSymbol() string {
+	return strings.ToLower(ticker.Data.Symbol)
 }
 
 type StreamDataBi struct {
@@ -40,27 +49,31 @@ type StreamDataBi struct {
 }
 
 type LatestTickerBi struct {
-	Symbol             string `json:"symbol,omitempty"`
-	PriceChange        string `json:"priceChange,omitempty"`
-	PriceChangePercent string `json:"priceChangePercent,omitempty"`
-	WeightedAvgPrice   string `json:"weightedAvgPrice,omitempty"`
+	Symbol             string `json:"symbol"`
+	PriceChange        string `json:"priceChange"`
+	PriceChangePercent string `json:"priceChangePercent"`
+	WeightedAvgPrice   string `json:"weightedAvgPrice"`
 	PrevClosePrice     string `json:"prevClosePrice"`
-	LastPrice          string `json:"lastPrice,omitempty"`
-	LastQty            string `json:"lastQty,omitempty"`
-	BidPrice           string `json:"bidPrice,omitempty"`
-	BidQty             string `json:"bidQty,omitempty"`
-	AskPrice           string `json:"askPrice,omitempty"`
-	AskQty             string `json:"askQty,omitempty"`
-	OpenPrice          string `json:"openPrice,omitempty"`
-	HighPrice          string `json:"highPrice,omitempty"`
-	LowPrice           string `json:"lowPrice,omitempty"`
-	Volume             string `json:"volume,omitempty"`
-	QuoteVolume        string `json:"quoteVolume,omitempty"`
-	OpenTime           int64  `json:"openVolume,omitempty"`
-	CloseTime          int64  `json:"closeVolume,omitempty"`
-	FirstId            int    `json:"firstId,omitempty"`
-	LastId             int    `json:"lastId,omitempty"`
-	Count              int    `json:"count,omitempty"`
-	Code               int    `json:"code,omitempty"`
-	Msg                string `json:"msg,omitempty"`
+	LastPrice          string `json:"lastPrice"`
+	LastQty            string `json:"lastQty"`
+	BidPrice           string `json:"bidPrice"`
+	BidQty             string `json:"bidQty"`
+	AskPrice           string `json:"askPrice"`
+	AskQty             string `json:"askQty"`
+	OpenPrice          string `json:"openPrice"`
+	HighPrice          string `json:"highPrice"`
+	LowPrice           string `json:"lowPrice"`
+	Volume             string `json:"volume"`
+	QuoteVolume        string `json:"quoteVolume"`
+	OpenTime           int64  `json:"openVolume"`
+	CloseTime          int64  `json:"closeVolume"`
+	FirstId            int    `json:"firstId"`
+	LastId             int    `json:"lastId"`
+	Count              int    `json:"count"`
+	Code               int    `json:"code"`
+	Msg                string `json:"msg"`
+}
+
+func (latestTicker *LatestTickerBi) GetLastPrice() (float64, error) {
+	return strconv.ParseFloat(latestTicker.LastPrice, 64)
 }

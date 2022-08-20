@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -12,6 +13,8 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
+
+var NoPairsErr error = errors.New("No pairs associated with this user")
 
 func GetUserCollection(client *mongo.Client) *mongo.Collection {
 	return client.Database("crypto_bot").Collection("users", options.Collection())
@@ -31,8 +34,27 @@ func GetUserByID(coll *mongo.Collection, id int64, ctx context.Context) (*models
 	if err != nil {
 		return nil, err
 	}
-
 	return &user, nil
+}
+
+func GetUsersWithPairs(coll *mongo.Collection, connected bool, ctx context.Context) ([]models.MongoUser, error) {
+	var users []models.MongoUser
+	cursor, err := coll.Find(ctx, bson.D{
+		primitive.E{
+			Key: "alerts.0", Value: bson.D{primitive.E{Key: "$exists", Value: true}},
+		},
+		primitive.E{
+			Key: "alerts", Value: bson.D{primitive.E{Key: "$elemMatch", Value: bson.D{primitive.E{Key: "connected", Value: connected}}}},
+		}},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("GetUsersWithPairs: %s", err)
+	}
+	err = cursor.All(ctx, &users)
+	if err != nil {
+		return nil, fmt.Errorf("GetUsersWithPairs: %s", err)
+	}
+	return users, nil
 }
 
 func DeleteUserByID(coll *mongo.Collection, id int64, ctx context.Context) error {
@@ -73,49 +95,33 @@ func DeleteAlerts(coll *mongo.Collection, id int64, alerts []models.Alert, ctx c
 	return nil
 }
 
-func UpdateAlerts(coll *mongo.Collection, id int64, oldAlerts []models.Alert, newAlerts []models.Alert, ctx context.Context) error {
-	mongoModels := []mongo.WriteModel{
-		mongo.NewUpdateOneModel().SetFilter(
-			bson.D{primitive.E{Key: "_id", Value: id}},
-		).SetUpdate(
-			bson.D{primitive.E{Key: "$pullAll", Value: bson.D{primitive.E{Key: "alerts", Value: oldAlerts}}}},
-		),
-		mongo.NewUpdateOneModel().SetFilter(
-			bson.D{primitive.E{Key: "_id", Value: id}},
-		).SetUpdate(
-			bson.D{primitive.E{Key: "$push", Value: bson.D{primitive.E{Key: "alerts", Value: bson.D{primitive.E{Key: "$each", Value: newAlerts}}}}}},
-		),
-	}
-
-	_, err := coll.BulkWrite(ctx, mongoModels)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func ShutdownSequence(coll *mongo.Collection, sessionAlerts map[int64][]models.Alert, count int, ctx context.Context) error {
+func ShutdownSequence(coll *mongo.Collection, sessionAlerts map[int64]*[]models.Alert, count int, ctx context.Context) error {
 	writeModels := make([]mongo.WriteModel, 0, count)
 	for k, v := range sessionAlerts {
-		writeModels = append(writeModels, setDisconnectAlerts(k, v)...)
+		writeModels = append(writeModels, setAlertsConnected(k, *v, false)...)
 	}
+
 	_, err := coll.BulkWrite(ctx, writeModels)
 	if err != nil {
-		return err
+		return fmt.Errorf("ShutdownSequence: %s", err)
 	}
 	return nil
 }
 
-// func test(id int64, pair string) *mongo.UpdateOneModel {
-// 	return mongo.NewUpdateOneModel().SetFilter(bson.D{primitive.E{Key: "_id", Value: id}, primitive.E{Key: "alerts.pair", Value: pair}}).SetUpdate(bson.D{primitive.E{Key: "$set", Value: bson.D{primitive.E{Key: "alerts.$.connected", Value: false}}}})
-// }
+func UpdateAlertsSqc(coll *mongo.Collection, id int64, alerts []models.Alert, connected bool, ctx context.Context) error {
+	_, err := coll.BulkWrite(ctx, setAlertsConnected(id, alerts, connected))
+	if err != nil {
+		return fmt.Errorf("UpdateAlertsSqc: %s", err)
+	}
+	return nil
+}
 
-func setDisconnectAlerts(id int64, alerts []models.Alert) []mongo.WriteModel {
+func setAlertsConnected(id int64, alerts []models.Alert, connected bool) []mongo.WriteModel {
 	updates := make([]mongo.WriteModel, len(alerts))
 	for i, v := range alerts {
 		updates[i] = mongo.NewUpdateOneModel().SetFilter(
-			bson.D{primitive.E{Key: "_id", Value: id}, primitive.E{Key: "alerts.pair", Value: v}},
-		).SetUpdate(bson.D{primitive.E{Key: "$set", Value: bson.D{primitive.E{Key: "alerts.$.connected", Value: false}}}})
+			bson.D{primitive.E{Key: "_id", Value: id}, primitive.E{Key: "alerts.pair", Value: v.Pair}},
+		).SetUpdate(bson.D{primitive.E{Key: "$set", Value: bson.D{primitive.E{Key: "alerts.$.connected", Value: connected}}}})
 	}
 	return updates
 }
@@ -146,6 +152,10 @@ func GetPairsByMarket(coll *mongo.Collection, id int64, market string, connected
 	if err != nil {
 		return nil, nil, err
 	}
+	if len(user.Alerts) == 0 {
+		return nil, nil, NoPairsErr
+	}
+
 	pairs := make([]string, len(user.Alerts))
 	alerts := make([]models.Alert, len(user.Alerts))
 
@@ -156,6 +166,10 @@ func GetPairsByMarket(coll *mongo.Collection, id int64, market string, connected
 			alerts[index] = v
 			index++
 		}
+	}
+
+	if pairs[0] == "" {
+		return nil, nil, NoPairsErr
 	}
 
 	pairs = pairs[:index]
@@ -169,10 +183,6 @@ func GetPairsByMarket(coll *mongo.Collection, id int64, market string, connected
 
 	return fPairs, fAlerts, nil
 }
-
-// func removePair(pairs []string, index int) []string {
-// 	return append(pairs[:index], pairs[index+1:]...)
-// }
 
 func splitPairs(result []interface{}) []string {
 	if len(result) == 0 {
